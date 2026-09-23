@@ -12,20 +12,21 @@ let loadFailed = false
 
 const FFMEPG_CORE_VERSION = '0.12.10'
 
-// core.js 本地自托管（110KB，同源无跨域问题）
+// core.js 本地自托管（esm版本，110KB，同源无跨域问题）
+// 注意：必须用esm版本，因为ffmpeg.wasm的worker是type:"module"，umd版本没有default export
 const LOCAL_CORE_URL = '/ffmpeg-core/ffmpeg-core.js'
 
-// wasm CDN 列表（直接 URL，不用 toBlobURL，避免 COEP 跨域 fetch 问题）
+// wasm CDN 列表（esm路径，wasm文件与umd版本相同）
 const WASM_CDNS = [
-  `https://unpkg.com/@ffmpeg/core@${FFMEPG_CORE_VERSION}/dist/umd/ffmpeg-core.wasm`,
-  `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${FFMEPG_CORE_VERSION}/dist/umd/ffmpeg-core.wasm`,
-  `https://fastly.jsdelivr.net/npm/@ffmpeg/core@${FFMEPG_CORE_VERSION}/dist/umd/ffmpeg-core.wasm`,
+  `https://unpkg.com/@ffmpeg/core@${FFMEPG_CORE_VERSION}/dist/esm/ffmpeg-core.wasm`,
+  `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${FFMEPG_CORE_VERSION}/dist/esm/ffmpeg-core.wasm`,
+  `https://fastly.jsdelivr.net/npm/@ffmpeg/core@${FFMEPG_CORE_VERSION}/dist/esm/ffmpeg-core.wasm`,
 ]
 
-// 完整 CDN fallback（core+wasm 都从 CDN，用 toBlobURL）
+// 完整 CDN fallback（core+wasm 都从 CDN esm版本）
 const FULL_CDNS = [
-  `https://unpkg.com/@ffmpeg/core@${FFMEPG_CORE_VERSION}/dist/umd`,
-  `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${FFMEPG_CORE_VERSION}/dist/umd`,
+  `https://unpkg.com/@ffmpeg/core@${FFMEPG_CORE_VERSION}/dist/esm`,
+  `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${FFMEPG_CORE_VERSION}/dist/esm`,
 ]
 
 function formatError(e: any): string {
