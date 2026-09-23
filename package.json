@@ -1,7 +1,7 @@
 {
   "name": "videokit-clone",
   "private": true,
-  "version": "0.3.3",
+  "version": "0.3.4",
   "type": "module",
   "description": "纯前端在线视频工具箱 - 基于 WebCodecs + ffmpeg.wasm，所有处理在浏览器本地完成",
   "scripts": {

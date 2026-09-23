@@ -9,7 +9,7 @@ type FilterTab = 'all' | 'favorites' | ToolCategory
 export default function HomePage() {
   const { lang, t } = useI18n()
   const { favorites, toggleFavorite, isFavorite } = useFavorites()
-  const [activeTab, setActiveTab] = useState<FilterTab>('all')
+  const [activeTab, setActiveTab] = useState<FilterTab>('convert')
   const [search, setSearch] = useState('')
 
   const tabs: { key: FilterTab; label: string }[] = [

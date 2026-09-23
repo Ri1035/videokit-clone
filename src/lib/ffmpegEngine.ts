@@ -194,7 +194,44 @@ export async function runFFmpegTask(task: FFmpegTask): Promise<Blob> {
     for (const input of task.inputFiles) {
       try { await ffmpeg.deleteFile(input.name) } catch {}
     }
-    throw new Error(`处理失败: ${e?.message || e}\n\n提示：某些视频格式/编码可能不被支持，请尝试转换为 MP4 后再处理。`)
+
+    const errMsg = e?.message || String(e)
+    const cmdStr = task.args.join(' ')
+
+    // 分类错误，给出针对性建议
+    let userMessage = ''
+    if (errMsg.includes('memory access out of bounds') || errMsg.includes('RuntimeError')) {
+      userMessage =
+        `处理失败：内存访问越界（memory access out of bounds）\n\n` +
+        `这是 ffmpeg.wasm 的已知限制，常见原因：\n` +
+        `1. 视频编码/格式不被 wasm 版本支持（如某些 HEVC、AV1、ProRes）\n` +
+        `2. 视频分辨率过高或文件过大\n` +
+        `3. 某些滤镜组合触发 wasm bug\n\n` +
+        `建议：\n` +
+        `• 先用「无损转封装」工具转为 MP4 后再处理\n` +
+        `• 尝试降低视频分辨率后再处理\n` +
+        `• 换用「视频格式转换」工具先转码\n\n` +
+        `技术详情：${errMsg.slice(0, 200)}\n` +
+        `执行命令：${cmdStr.slice(0, 200)}`
+    } else if (errMsg.includes('Invalid data found') || errMsg.includes('Invalid argument')) {
+      userMessage =
+        `处理失败：无法识别文件格式或参数无效\n\n` +
+        `可能原因：文件损坏、格式不支持、或参数组合有误\n` +
+        `建议：先用「视频格式转换」转为标准 MP4 后再处理\n\n` +
+        `技术详情：${errMsg.slice(0, 200)}`
+    } else if (errMsg.includes('Permission denied') || errMsg.includes('Operation not permitted')) {
+      userMessage =
+        `处理失败：文件访问权限问题\n\n` +
+        `建议：刷新页面后重试，或重新上传文件\n\n` +
+        `技术详情：${errMsg.slice(0, 200)}`
+    } else {
+      userMessage =
+        `处理失败：${errMsg.slice(0, 300)}\n\n` +
+        `提示：某些视频格式/编码可能不被支持，请尝试先用「无损转封装」或「视频格式转换」转为 MP4 后再处理。\n` +
+        `执行命令：${cmdStr.slice(0, 200)}`
+    }
+
+    throw new Error(userMessage)
   }
 
   let data
