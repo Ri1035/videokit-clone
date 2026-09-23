@@ -59,10 +59,8 @@ const translations = {
     toolsCount: '个工具',
     category: {
       convert: '格式转换',
-      compress: '压缩优化',
-      edit: '编辑处理',
-      extract: '提取导出',
-      fun: '特色玩法',
+      video: '视频工具',
+      audio: '音频工具',
     },
   },
   en: {
@@ -118,10 +116,8 @@ const translations = {
     toolsCount: 'tools',
     category: {
       convert: 'Convert',
-      compress: 'Compress',
-      edit: 'Edit',
-      extract: 'Extract',
-      fun: 'Fun',
+      video: 'Video Tools',
+      audio: 'Audio Tools',
     },
   },
 }

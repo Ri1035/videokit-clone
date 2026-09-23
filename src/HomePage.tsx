@@ -15,9 +15,9 @@ export default function HomePage() {
   const tabs: { key: FilterTab; label: string }[] = [
     { key: 'all', label: t('allTools') },
     { key: 'favorites', label: `${t('favorites')}${favorites.length > 0 ? ` (${favorites.length})` : ''}` },
-    ...(['convert', 'compress', 'edit', 'extract', 'fun'] as ToolCategory[]).map(c => ({
+    ...(['convert', 'video', 'audio'] as ToolCategory[]).map(c => ({
       key: c as FilterTab,
-      label: CATEGORY_LABELS[c][lang],
+      label: `${CATEGORY_LABELS[c].icon} ${CATEGORY_LABELS[c][lang]}`,
     })),
   ]
 
@@ -40,7 +40,7 @@ export default function HomePage() {
     return tools
   }, [activeTab, search, favorites])
 
-  const categoryOrder: ToolCategory[] = ['convert', 'compress', 'edit', 'extract', 'fun']
+  const categoryOrder: ToolCategory[] = ['convert', 'video', 'audio']
 
   return (
     <div className="animate-fade-in">

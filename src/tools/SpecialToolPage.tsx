@@ -6,7 +6,7 @@ import { BatchTranscode, BatchCompress, VideoMerger, AudioMerger, ImageToVideo, 
 import { VideoTrimmer, VideoSplitter, AudioTrimmer } from './timeline'
 import { VideoCrop, AddWatermark, RemoveWatermark, VideoColor, AddText, AddSubtitles } from './visual-edit'
 import { VideoToGif, GifCompress } from './gif-tools'
-import { ThumbnailExtract, AddBgm, Sora2Watermark } from './misc'
+import { ThumbnailExtract, AddBgm } from './misc'
 
 const SPECIAL_COMPONENTS: Record<string, React.ComponentType> = {
   'video-converter': VideoConverter,
@@ -35,7 +35,6 @@ const SPECIAL_COMPONENTS: Record<string, React.ComponentType> = {
   'gif-compress': GifCompress,
   'thumbnail-extract': ThumbnailExtract,
   'add-bgm': AddBgm,
-  'sora2-watermark': Sora2Watermark,
 }
 
 export default function SpecialToolPage() {
