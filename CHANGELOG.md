@@ -5,6 +5,36 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [未发布]
+
+## [0.2.0] - 2026-09-23
+
+### 新增
+- **版本管理体系**：语义化版本号（semver）、版本升级脚本（patch/minor/major）、自动版本号注入
+- **Git Tag 管理**：规范的发布流程，版本号与 Git Tag 对应
+- **应用内版本显示**：页脚显示版本号，点击可跳转 GitHub 仓库
+- **用户操作历史**：记录每次视频处理操作（工具、文件名、大小、耗时、状态），支持查看/删除/清空/统计
+- **错误日志系统**：全局错误捕获（JS错误/Promise拒绝/ffmpeg错误），本地存储最多200条，支持查看详情/导出JSON/清空
+- **错误监控初始化**：应用启动时自动注册全局错误监听
+- **部署记录文档**：DEPLOY.md 记录每次部署的版本、时间、变更
+- **自动化部署脚本**：`npm run deploy` 一键构建+部署到 Cloudflare Pages
+- **发布脚本**：`npm run release` 标准化发布流程
+
+### 改进
+- 处理流程 Hook 集成历史记录和错误日志，每次处理自动记录
+- 页脚增加版本号、历史记录、错误日志入口
+
+### 技术
+- 新增 `src/version/version.ts` 版本常量（自动生成）
+- 新增 `src/lib/history.ts` 历史记录管理
+- 新增 `src/lib/errorLog.ts` 错误日志管理
+- 新增 `src/components/VersionBadge.tsx` 版本徽章组件
+- 新增 `src/components/HistoryPanel.tsx` 历史记录面板
+- 新增 `src/components/ErrorLogPanel.tsx` 错误日志面板
+- 新增 `scripts/update-version.js` 版本同步脚本
+- 新增 `scripts/release.js` 发布脚本
+- 新增 `.npmrc` 配置
+
 ## [0.1.0] - 2026-09-23
 
 ### 新增
@@ -72,3 +102,8 @@
 - Cloudflare Pages 部署配置（_headers COOP/COEP）
 - HashRouter 路由（兼容静态托管）
 - 代码分包：ffmpeg / mediabunny / react-vendor 独立 chunk
+
+---
+
+[0.2.0]: https://github.com/Ri1035/videokit-clone/releases/tag/v0.2.0
+[0.1.0]: https://github.com/Ri1035/videokit-clone/releases/tag/v0.1.0

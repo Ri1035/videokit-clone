@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { useI18n } from '../i18n'
 import { useTheme } from '../hooks/useTheme'
 import { TOTAL_TOOLS } from '../data/tools'
+import VersionBadge from './VersionBadge'
 
 interface LayoutProps {
   children: ReactNode
@@ -60,12 +61,15 @@ export default function Layout({ children }: LayoutProps) {
 
       {/* Footer */}
       <footer className="border-t border-gray-100 dark:border-slate-700 py-6 mt-8">
-        <div className="max-w-6xl mx-auto px-4 text-center text-xs text-gray-400 dark:text-slate-500">
-          <p>{t('footer')}</p>
-          <div className="flex justify-center gap-4 mt-2">
+        <div className="max-w-6xl mx-auto px-4 text-center">
+          <p className="text-xs text-gray-400 dark:text-slate-500">{t('footer')}</p>
+          <div className="flex justify-center gap-4 mt-2 text-xs text-gray-400 dark:text-slate-500">
             <span>{t('privacyPolicy')}</span>
             <span>{t('terms')}</span>
             <span>{t('feedback')}</span>
+          </div>
+          <div className="mt-3 flex justify-center">
+            <VersionBadge />
           </div>
         </div>
       </footer>
