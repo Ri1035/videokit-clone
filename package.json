@@ -1,7 +1,7 @@
 {
   "name": "videokit-clone",
   "private": true,
-  "version": "0.3.1",
+  "version": "0.3.2",
   "type": "module",
   "description": "纯前端在线视频工具箱 - 基于 WebCodecs + ffmpeg.wasm，所有处理在浏览器本地完成",
   "scripts": {
@@ -16,6 +16,7 @@
     "deploy": "npm run build && wrangler pages deploy dist --project-name=videokit --branch=main"
   },
   "dependencies": {
+    "@ffmpeg/core": "^0.12.10",
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
     "mediabunny": "^1.42.0",

@@ -1,6 +1,7 @@
 /**
- * FFmpeg.wasm 引擎封装（v2 修复版）
- * 修复：加载失败无重试、CDN不稳定、错误信息不明确、单例卡死等问题
+ * FFmpeg.wasm 引擎封装（v4 混合托管修复版）
+ * core.js 本地自托管（同源稳定），wasm 从 CDN 直接加载（避开 CF 25MB 限制）
+ * 多 CDN fallback + 详细错误诊断
  */
 import { FFmpeg } from '@ffmpeg/ffmpeg'
 import { fetchFile, toBlobURL } from '@ffmpeg/util'
@@ -11,18 +12,32 @@ let loadFailed = false
 
 const FFMEPG_CORE_VERSION = '0.12.10'
 
-// 多CDN fallback，提高加载成功率
-const CDN_BASES = [
-  `https://unpkg.com/@ffmpeg/core@${FFMEPG_CORE_VERSION}/dist/umd`,
-  `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${FFMEPG_CORE_VERSION}/dist/umd`,
-  `https://cdnjs.cloudflare.com/ajax/libs/ffmpeg-core/${FFMEPG_CORE_VERSION}`,
+// core.js 本地自托管（110KB，同源无跨域问题）
+const LOCAL_CORE_URL = '/ffmpeg-core/ffmpeg-core.js'
+
+// wasm CDN 列表（直接 URL，不用 toBlobURL，避免 COEP 跨域 fetch 问题）
+const WASM_CDNS = [
+  `https://unpkg.com/@ffmpeg/core@${FFMEPG_CORE_VERSION}/dist/umd/ffmpeg-core.wasm`,
+  `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${FFMEPG_CORE_VERSION}/dist/umd/ffmpeg-core.wasm`,
+  `https://fastly.jsdelivr.net/npm/@ffmpeg/core@${FFMEPG_CORE_VERSION}/dist/umd/ffmpeg-core.wasm`,
 ]
 
+// 完整 CDN fallback（core+wasm 都从 CDN，用 toBlobURL）
+const FULL_CDNS = [
+  `https://unpkg.com/@ffmpeg/core@${FFMEPG_CORE_VERSION}/dist/umd`,
+  `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${FFMEPG_CORE_VERSION}/dist/umd`,
+]
+
+function formatError(e: any): string {
+  if (!e) return '未知错误（null/undefined）'
+  if (e.message) return e.message
+  if (typeof e === 'string') return e
+  try { return JSON.stringify(e) } catch { return String(e) }
+}
+
 export async function getFFmpeg(): Promise<FFmpeg> {
-  // 如果已有可用实例，直接返回
   if (ffmpegInstance?.loaded && !loadFailed) return ffmpegInstance
 
-  // 如果之前加载失败，重置状态重试
   if (loadFailed) {
     loadFailed = false
     loadPromise = null
@@ -36,38 +51,92 @@ export async function getFFmpeg(): Promise<FFmpeg> {
   }
 
   loadPromise = (async () => {
-    const ffmpeg = new FFmpeg()
-    ffmpegInstance = ffmpeg
+    let lastError: any = null
+    let attempt = 0
 
-    let lastError: Error | null = null
-
-    // 依次尝试各个CDN
-    for (const baseURL of CDN_BASES) {
+    // === 策略1：本地 core.js + CDN wasm（直接 URL）===
+    for (const wasmURL of WASM_CDNS) {
+      attempt++
       try {
-        console.log(`[ffmpeg] 尝试从 ${baseURL} 加载引擎...`)
+        const ffmpeg = new FFmpeg()
+        ffmpegInstance = ffmpeg
+        console.log(`[ffmpeg] 尝试 ${attempt}: 本地core + ${wasmURL}`)
+
+        await ffmpeg.load({
+          coreURL: LOCAL_CORE_URL,
+          wasmURL: wasmURL,
+        })
+
+        console.log(`[ffmpeg] 加载成功 ✓ (本地core + CDN wasm)`)
+        lastError = null
+        return
+      } catch (e: any) {
+        lastError = e
+        console.warn(`[ffmpeg] 策略1失败 (${wasmURL}):`, formatError(e))
+        ffmpegInstance = new FFmpeg()
+      }
+    }
+
+    // === 策略2：本地 core.js + CDN wasm（toBlobURL）===
+    for (const wasmURL of WASM_CDNS.slice(0, 2)) {
+      attempt++
+      try {
+        const ffmpeg = new FFmpeg()
+        ffmpegInstance = ffmpeg
+        console.log(`[ffmpeg] 尝试 ${attempt}: 本地core + toBlobURL(${wasmURL})`)
+
+        const blobWasm = await toBlobURL(wasmURL, 'application/wasm')
+        await ffmpeg.load({
+          coreURL: LOCAL_CORE_URL,
+          wasmURL: blobWasm,
+        })
+
+        console.log(`[ffmpeg] 加载成功 ✓ (本地core + toBlobURL wasm)`)
+        lastError = null
+        return
+      } catch (e: any) {
+        lastError = e
+        console.warn(`[ffmpeg] 策略2失败:`, formatError(e))
+        ffmpegInstance = new FFmpeg()
+      }
+    }
+
+    // === 策略3：全部从 CDN（toBlobURL）===
+    for (const baseURL of FULL_CDNS) {
+      attempt++
+      try {
+        const ffmpeg = new FFmpeg()
+        ffmpegInstance = ffmpeg
+        console.log(`[ffmpeg] 尝试 ${attempt}: 全CDN toBlobURL (${baseURL})`)
 
         await ffmpeg.load({
           coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
           wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
         })
 
-        console.log('[ffmpeg] 引擎加载成功 ✓')
+        console.log(`[ffmpeg] 加载成功 ✓ (全CDN)`)
         lastError = null
         return
       } catch (e: any) {
         lastError = e
-        console.warn(`[ffmpeg] 从 ${baseURL} 加载失败:`, e?.message || e)
-        // 继续尝试下一个CDN
+        console.warn(`[ffmpeg] 策略3失败 (${baseURL}):`, formatError(e))
+        ffmpegInstance = new FFmpeg()
       }
     }
 
-    // 所有CDN都失败
+    // 全部失败
     loadFailed = true
     loadPromise = null
+    const errDetail = formatError(lastError)
     throw new Error(
-      `FFmpeg 引擎加载失败。可能原因：网络问题、浏览器不支持 WebAssembly、或缺少 COOP/COEP 安全头。\n` +
-      `最后错误: ${lastError?.message || '未知错误'}\n` +
-      `建议：检查网络连接，或使用 Chrome/Edge 最新版浏览器。`
+      `FFmpeg 引擎加载失败（已尝试 ${attempt} 种方式）。\n\n` +
+      `最后错误: ${errDetail}\n\n` +
+      `排查建议：\n` +
+      `1. 按 F12 打开控制台，查看 Console 和 Network 标签的具体错误\n` +
+      `2. 确认浏览器支持 WebAssembly（Chrome/Edge/Firefox 最新版）\n` +
+      `3. 检查网络是否能访问 unpkg.com / jsdelivr.net\n` +
+      `4. 尝试刷新页面或清除缓存后重试\n` +
+      `5. 如使用公司网络/代理，可能拦截了 wasm 文件下载`
     )
   })()
 
@@ -85,25 +154,14 @@ export interface FFmpegTask {
   args: string[]
   outputName: string
   onProgress?: (p: FFmpegProgress) => void
-  /** 工具ID，用于错误日志 */
   toolId?: string
-}
-
-/**
- * 生成安全的临时文件名
- * 避免中文/特殊字符导致 ffmpeg 命令解析失败
- */
-function safeName(prefix: string, ext: string): string {
-  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.${ext}`
 }
 
 export async function runFFmpegTask(task: FFmpegTask): Promise<Blob> {
   const ffmpeg = await getFFmpeg()
 
-  // 清理旧的输出文件
   try { await ffmpeg.deleteFile(task.outputName) } catch {}
 
-  // 写入输入文件
   for (const input of task.inputFiles) {
     try {
       await ffmpeg.writeFile(input.name, await fetchFile(input.file))
@@ -112,18 +170,16 @@ export async function runFFmpegTask(task: FFmpegTask): Promise<Blob> {
     }
   }
 
-  // 进度回调
   if (task.onProgress) {
     ffmpeg.on('progress', ({ progress, time }) => {
       task.onProgress!({ progress: Math.min(Math.max(progress, 0), 1), time })
     })
   }
 
-  // 日志回调，便于调试
   let lastLogs: string[] = []
   ffmpeg.on('log', ({ message }) => {
     lastLogs.push(message)
-    if (lastLogs.length > 20) lastLogs.shift()
+    if (lastLogs.length > 30) lastLogs.shift()
   })
 
   try {
@@ -131,17 +187,15 @@ export async function runFFmpegTask(task: FFmpegTask): Promise<Blob> {
     const exitCode = await ffmpeg.exec(task.args)
 
     if (exitCode !== 0) {
-      throw new Error(`FFmpeg 退出码: ${exitCode}\n最近日志:\n${lastLogs.slice(-5).join('\n')}`)
+      throw new Error(`FFmpeg 退出码: ${exitCode}\n最近日志:\n${lastLogs.slice(-8).join('\n')}`)
     }
   } catch (e: any) {
-    // 清理输入文件
     for (const input of task.inputFiles) {
       try { await ffmpeg.deleteFile(input.name) } catch {}
     }
     throw new Error(`处理失败: ${e?.message || e}\n\n提示：某些视频格式/编码可能不被支持，请尝试转换为 MP4 后再处理。`)
   }
 
-  // 读取输出
   let data
   try {
     data = await ffmpeg.readFile(task.outputName)
@@ -151,7 +205,6 @@ export async function runFFmpegTask(task: FFmpegTask): Promise<Blob> {
 
   const blob = new Blob([new Uint8Array(data as Uint8Array)], { type: getMimeType(task.outputName) })
 
-  // 清理
   for (const input of task.inputFiles) {
     try { await ffmpeg.deleteFile(input.name) } catch {}
   }
@@ -174,12 +227,10 @@ function getMimeType(filename: string): string {
   return map[ext || ''] || 'application/octet-stream'
 }
 
-/** 检查浏览器是否支持 SharedArrayBuffer（ffmpeg多线程需要） */
 export function checkSharedArrayBuffer(): boolean {
   return typeof SharedArrayBuffer !== 'undefined'
 }
 
-/** 重置引擎状态（用于错误恢复） */
 export function resetFFmpeg() {
   ffmpegInstance = null
   loadPromise = null

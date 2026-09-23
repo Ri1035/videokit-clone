@@ -7,6 +7,17 @@
 
 ## [未发布]
 
+## [0.3.2] - 2026-09-23
+
+### 修复
+- **关键修复**：解决 FFmpeg 引擎加载失败"未知错误"问题
+  - 根因：COEP 环境下 toBlobURL 跨域 fetch CDN 资源失败
+  - 方案：core.js 本地自托管（同源稳定），wasm 从 CDN 直接加载
+  - 三级 fallback 策略：本地core+CDN wasm → 本地core+toBlobURL wasm → 全CDN toBlobURL
+  - 增加 fastly.jsdelivr.net 作为第三个 CDN
+  - 错误信息大幅改进，显示原始错误和排查建议
+- ffmpeg-core.js 自托管到 public/ffmpeg-core/（110KB）
+
 ## [0.3.1] - 2026-09-23
 
 ### 新增
