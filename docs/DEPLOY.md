@@ -16,6 +16,26 @@
 
 ## 部署历史
 
+### 2026-09-23 v0.3.5 — 修复视频调速音画不同步等 4 项问题
+
+- **版本**: v0.3.5
+- **部署时间**: 2026-09-23
+- **部署人**: VideoKit Dev
+- **Commit**: fb79d6e
+- **部署地址**: https://142f35a5.videokit-9kp.pages.dev （生产别名 https://videokit-9kp.pages.dev）
+- **变更**:
+  - 修复「视频调速」慢放档位音画不同步（0.25x/0.5x 音频被反向加速）
+  - 修复「视频调速」对无音轨视频直接失败
+  - 修复本地开发环境 ffmpeg-core.js 加载失败（Vite dev 的 `?import` 问题）
+  - 修复 FFmpeg 单例监听器泄漏
+  - 移除未使用的 mediabunny 依赖；vite preview 补齐 COOP/COEP
+- **验证**:
+  - ✅ HTTP 200，COOP/COEP headers 生效
+  - ✅ 部署包 hash `index-D6_6P_1F.js` 与本地 `npm run build` 产物一致
+  - ✅ 线上真实转码：合成 WAV(31.29 KB) → MP3(18.33 KB)，处理成功并可下载
+  - ✅ 线上引擎在第 1 次加载策略即成功（本地 core + CDN wasm）
+  - ✅ 首页 52 个工具正常渲染（格式转换 13 / 视频工具 20 / 音频工具 19）
+
 ### 2026-09-23 v0.1.0 — 首次部署
 
 - **版本**: v0.1.0

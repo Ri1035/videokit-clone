@@ -68,7 +68,7 @@ videokit-clone/
 │   │   ├── FileUpload.tsx       # 文件上传组件
 │   │   ├── ProgressBar.tsx      # 进度条（支持indeterminate模式）
 │   │   ├── useToolProcessor.tsx # ⭐ 通用处理逻辑hook
-│   │   ├── VersionBadge.tsx     # 页脚版本号徽章
+│   │   ├── VersionBadge.tsx     # 版本号徽章 + 历史记录/错误日志入口（在右上角 👤 浮层内，不在页脚）
 │   │   ├── HistoryPanel.tsx     # 历史记录面板
 │   │   └── ErrorLogPanel.tsx    # 错误日志面板
 │   ├── tools/
@@ -198,7 +198,7 @@ CLOUDFLARE_API_TOKEN=<token> npx wrangler pages deploy dist --project-name=video
 
 ### 5.3 版本相关文件
 - `package.json` - 版本号
-- `src/version/version.ts` - 自动生成，页脚显示
+- `src/version/version.ts` - 自动生成，在右上角 👤 浮层内显示
 - `CHANGELOG.md` - 变更日志（每个版本必须记录）
 - `docs/DEPLOY.md` - 部署记录
 - Git tags - v0.1.0 ~ v0.3.3
@@ -313,13 +313,13 @@ npm run build  # 生产构建
 ### 8.1 用户操作历史
 - 存储：localStorage（key: `videokit_history`）
 - 记录：工具ID、工具名、输入文件名、输入大小、输出文件名、输出大小、状态、耗时
-- 入口：页脚版本号 → 历史记录
+- 入口：右上角 👤 浮层 → 版本号旁的「历史记录」（**注意：不在页脚**，v0.3.1 起已移入 👤 浮层）
 - 上限：最近50条
 
 ### 8.2 全局错误日志
 - 存储：localStorage（key: `videokit_error_logs`）
 - 捕获：JS错误、Promise拒绝、ffmpeg错误
-- 入口：页脚版本号 → 错误日志
+- 入口：右上角 👤 浮层 → 版本号旁的「错误日志」（**注意：不在页脚**）
 - 支持导出JSON
 
 ### 8.3 控制台日志
@@ -382,6 +382,10 @@ npm run build  # 生产构建
 ### 本次修复
 见 CHANGELOG `[0.3.5]`：视频调速音画不同步、无音轨视频失败、dev 下 core.js 加载失败、
 FFmpeg 单例监听器泄漏；并移除未使用的 mediabunny 依赖、补齐 preview 响应头。
+
+### 文档修正
+- 原文多处写「页脚版本号 → 历史记录/错误日志」，实测页脚只有版权信息。
+  `VersionBadge` 自 v0.3.1 起已移入**右上角 👤 浮层**，本文档相关描述已更正。
 
 ### 实测踩坑（排查时容易被误导）
 - 在**线上页面**里用 `fetch('http://localhost:xxxx/...')` 注入测试文件会因混合内容/CORS 被拦截，
