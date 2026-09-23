@@ -140,7 +140,12 @@ export function useToolProcessor() {
     if (!processing) return null
     return (
       <div className="mt-5 animate-slide-up">
-        <ProgressBar progress={progress} label={engineLoading ? t('loadingEngine') : t('processing')} />
+        <ProgressBar
+          progress={progress}
+          label={engineLoading ? t('loadingEngine') : t('processing')}
+          indeterminate={engineLoading}
+          showPercent={!engineLoading}
+        />
       </div>
     )
   }

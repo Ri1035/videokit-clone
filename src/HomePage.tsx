@@ -13,12 +13,12 @@ export default function HomePage() {
   const [search, setSearch] = useState('')
 
   const tabs: { key: FilterTab; label: string }[] = [
-    { key: 'all', label: t('allTools') },
-    { key: 'favorites', label: `${t('favorites')}${favorites.length > 0 ? ` (${favorites.length})` : ''}` },
     ...(['convert', 'video', 'audio'] as ToolCategory[]).map(c => ({
       key: c as FilterTab,
       label: `${CATEGORY_LABELS[c].icon} ${CATEGORY_LABELS[c][lang]}`,
     })),
+    { key: 'favorites', label: `⭐ ${t('favorites')}${favorites.length > 0 ? ` (${favorites.length})` : ''}` },
+    { key: 'all', label: `📋 ${t('allTools')}` },
   ]
 
   const filteredTools = useMemo(() => {
@@ -53,21 +53,6 @@ export default function HomePage() {
         <p className="text-gray-500 dark:text-slate-400 text-sm md:text-base max-w-xl mx-auto">
           {t('tagline')}
         </p>
-        <div className="flex flex-wrap justify-center gap-3 mt-5">
-          {[
-            { icon: '🔒', label: t('privacy'), sub: t('localProcess') },
-            { icon: '🆓', label: t('free'), sub: t('allFree') },
-            { icon: '⚡', label: t('fast'), sub: t('browserFast') },
-          ].map((f, i) => (
-            <div key={i} className="card px-4 py-2.5 flex items-center gap-2.5">
-              <span className="text-lg">{f.icon}</span>
-              <div className="text-left">
-                <p className="text-xs font-semibold text-gray-700 dark:text-slate-200">{f.label}</p>
-                <p className="text-[10px] text-gray-400">{f.sub}</p>
-              </div>
-            </div>
-          ))}
-        </div>
       </div>
 
       {/* Search */}
