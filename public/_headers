@@ -1,0 +1,9 @@
+/*
+  Cloudflare Pages Headers
+  ffmpeg.wasm 多线程需要 SharedArrayBuffer，必须设置 COOP/COEP
+*/
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
