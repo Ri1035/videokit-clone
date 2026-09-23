@@ -7,6 +7,15 @@
 
 ## [未发布]
 
+## [0.3.3] - 2026-09-23
+
+### 修复
+- **根因修复**：FFmpeg 引擎加载失败 "failed to import ffmpeg-core.js"
+  - 根因：ffmpeg.wasm 的 Web Worker 是 `type: "module"`，需要 esm 版本的 core.js
+  - umd 版本没有 default export，import() 加载后 .default 为 undefined，抛出 ERROR_IMPORT_FAILURE
+  - 修复：本地 core.js 和所有 CDN 路径从 `dist/umd/` 改为 `dist/esm/`
+  - 验证：预览环境上传测试视频，4秒内加载引擎并处理成功
+
 ## [0.3.2] - 2026-09-23
 
 ### 修复
