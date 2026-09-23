@@ -7,6 +7,35 @@
 
 ## [未发布]
 
+## [0.3.5] - 2026-09-23
+
+### 修复
+- **视频调速音画不同步（严重）**：所有慢放档位（0.25x / 0.5x）音频被反向加速
+  - 根因：`atempo` 取值为 `speed > 1 ? speed : 1 / speed`，慢放时取到的是倒数（0.25x → `atempo=4`）
+  - 实测：3.000s 输入 → 输出视频 11.934s，音轨仅 0.743s，音画完全错位
+  - 修复：atempo 与视频同向取值，并按 atempo 单次 0.5~100 的限制串联（0.25x → `atempo=0.5,atempo=0.5`）
+  - 实测修复后：视频 11.994s / 音轨 11.993s，完全同步
+- **视频调速对无音轨视频直接失败**：`-filter_complex [0:a]` 报 `Stream specifier ':a' ... matches no streams`
+  - 修复：改用 `-vf` / `-af`，无音频流时 `-af` 会被自动忽略
+- **本地开发环境 ffmpeg-core.js 加载失败**：dev 下前 5 次加载策略全部失败，只能回退到全 CDN（第 6 次）
+  - 根因：Vite dev 会把 worker 内 `import(url)` 改写为 `import(__vite__injectQuery(url, 'import'))`，
+    请求变成 `/ffmpeg-core/ffmpeg-core.js?import`；而 Vite 的 `servePublicMiddleware` 对
+    `isImportRequest` 直接 `next()`，public 目录文件不再命中，最终回退到 SPA `index.html`（`text/html`），
+    动态 import 报 `TypeError: Failed to fetch dynamically imported module`
+  - 修复：`LOCAL_CORE_URL` 改为带 origin 的绝对 URL（`injectQuery` 对绝对 URL 原样返回）
+  - 实测修复后：dev 与生产构建均在第 1 次尝试即加载成功
+- **FFmpeg 单例监听器泄漏**：`runFFmpegTask` 每次调用都注册 progress/log 监听器且从不移除，
+  多次处理后监听器持续累积（内存泄漏 + 旧任务进度回调串扰新任务）
+  - 修复：任务结束（含异常路径）时用 `ffmpeg.off()` 移除
+
+### 优化
+- 移除未使用的 `mediabunny` 依赖及对应空 chunk（构建产物不再出现 `Generated an empty chunk: "mediabunny"`）
+- `vite preview` 补齐 COOP/COEP 等响应头，使本地预览能真实复现 Cloudflare Pages 环境
+- `LOCAL_CORE_URL` 常量名拼写修正（`FFMEPG` → `FFMPEG`）
+
+### 文档
+- HANDOFF.md 更新至 v0.3.5：补充 Vite dev 下 core.js 的踩坑记录、监听器泄漏、视频调速滤镜约束
+
 ## [0.3.4] - 2026-09-23
 
 ### 新增

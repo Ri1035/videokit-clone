@@ -8,6 +8,20 @@ export interface CommandParams {
   [key: string]: string | number | boolean
 }
 
+/**
+ * 生成 atempo 滤镜串。
+ * atempo 单次只接受 0.5~100 的取值，超出范围必须串联多个 atempo。
+ * 例：0.25x 慢放 => "atempo=0.5,atempo=0.5"
+ */
+function buildAtempoFilter(speed: number): string {
+  const parts: string[] = []
+  let remaining = speed
+  while (remaining < 0.5) { parts.push('atempo=0.5'); remaining /= 0.5 }
+  while (remaining > 100) { parts.push('atempo=100'); remaining /= 100 }
+  parts.push(`atempo=${Number(remaining.toFixed(4))}`)
+  return parts.join(',')
+}
+
 export function generateFFmpegArgs(
   command: string,
   inputName: string,
@@ -58,11 +72,14 @@ export function generateFFmpegArgs(
 
     case 'speed': {
       const speed = parseFloat(String(params.speed || '2'))
-      const atempo = speed > 1 ? speed : 1 / speed
-      // ffmpeg setpts 加速：speed>1 时 pts 减小
-      const videoSpeed = speed > 1 ? `setpts=${(1/speed).toFixed(4)}*PTS` : `setpts=${(1/speed).toFixed(4)}*PTS`
-      const audioSpeed = `atempo=${atempo}`
-      return ['-i', inputName, '-filter_complex', `[0:v]${videoSpeed}[v];[0:a]${audioSpeed}[a]`, '-map', '[v]', '-map', '[a]', '-c:v', 'libx264', '-preset', 'fast', '-c:a', 'aac', '-movflags', '+faststart', outputName]
+      // setpts：speed>1 时 pts 变小 => 变快；speed<1 时 pts 变大 => 变慢
+      const videoSpeed = `setpts=${(1 / speed).toFixed(4)}*PTS`
+      // atempo 必须与视频同向变化。此前写成 speed > 1 ? speed : 1/speed，
+      // 导致所有慢放档位（0.25x / 0.5x）音频反而被加速，音画严重不同步。
+      const audioSpeed = buildAtempoFilter(speed)
+      // 使用 -vf/-af 而不是 -filter_complex：无音轨的视频上 [0:a] 会直接失败
+      // （Stream specifier ':a' ... matches no streams），而 -af 在没有音频流时会被忽略。
+      return ['-i', inputName, '-vf', videoSpeed, '-af', audioSpeed, '-c:v', 'libx264', '-preset', 'fast', '-c:a', 'aac', '-movflags', '+faststart', outputName]
     }
 
     case 'reverse':

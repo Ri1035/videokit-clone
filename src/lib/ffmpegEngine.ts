@@ -1,7 +1,11 @@
 /**
- * FFmpeg.wasm 引擎封装（v4 混合托管修复版）
+ * FFmpeg.wasm 引擎封装（v5 修复版）
  * core.js 本地自托管（同源稳定），wasm 从 CDN 直接加载（避开 CF 25MB 限制）
  * 多 CDN fallback + 详细错误诊断
+ *
+ * v5 变更：
+ * 1. LOCAL_CORE_URL 改为带 origin 的绝对 URL —— 修复 Vite dev 下 core.js 加载失败
+ * 2. runFFmpegTask 结束后移除 progress/log 监听器 —— 修复单例监听器累积（内存泄漏 + 进度串扰）
  */
 import { FFmpeg } from '@ffmpeg/ffmpeg'
 import { fetchFile, toBlobURL } from '@ffmpeg/util'
@@ -10,23 +14,31 @@ let ffmpegInstance: FFmpeg | null = null
 let loadPromise: Promise<void> | null = null
 let loadFailed = false
 
-const FFMEPG_CORE_VERSION = '0.12.10'
+const FFMPEG_CORE_VERSION = '0.12.10'
 
 // core.js 本地自托管（esm版本，110KB，同源无跨域问题）
 // 注意：必须用esm版本，因为ffmpeg.wasm的worker是type:"module"，umd版本没有default export
-const LOCAL_CORE_URL = '/ffmpeg-core/ffmpeg-core.js'
+//
+// ⚠️ 必须使用「带 origin 的绝对 URL」，不能写 '/ffmpeg-core/ffmpeg-core.js'：
+// Vite 开发服务器会把 worker 内的 import(url) 改写为 import(__vite__injectQuery(url, 'import'))，
+// 即请求变成 '/ffmpeg-core/ffmpeg-core.js?import'；而 Vite 的 servePublicMiddleware 对
+// isImportRequest（?import）的请求直接 next()，public 目录文件不再命中，
+// 最终落到 SPA fallback 返回 index.html（Content-Type: text/html），动态 import 失败：
+//   TypeError: Failed to fetch dynamically imported module: .../ffmpeg-core.js?import=
+// injectQuery 对不以 './' 或 '/' 开头的绝对 URL 会原样返回，所以这里必须拼上 origin。
+const LOCAL_CORE_URL = new URL('/ffmpeg-core/ffmpeg-core.js', globalThis.location.origin).href
 
 // wasm CDN 列表（esm路径，wasm文件与umd版本相同）
 const WASM_CDNS = [
-  `https://unpkg.com/@ffmpeg/core@${FFMEPG_CORE_VERSION}/dist/esm/ffmpeg-core.wasm`,
-  `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${FFMEPG_CORE_VERSION}/dist/esm/ffmpeg-core.wasm`,
-  `https://fastly.jsdelivr.net/npm/@ffmpeg/core@${FFMEPG_CORE_VERSION}/dist/esm/ffmpeg-core.wasm`,
+  `https://unpkg.com/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/esm/ffmpeg-core.wasm`,
+  `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/esm/ffmpeg-core.wasm`,
+  `https://fastly.jsdelivr.net/npm/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/esm/ffmpeg-core.wasm`,
 ]
 
 // 完整 CDN fallback（core+wasm 都从 CDN esm版本）
 const FULL_CDNS = [
-  `https://unpkg.com/@ffmpeg/core@${FFMEPG_CORE_VERSION}/dist/esm`,
-  `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${FFMEPG_CORE_VERSION}/dist/esm`,
+  `https://unpkg.com/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/esm`,
+  `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/esm`,
 ]
 
 function formatError(e: any): string {
@@ -171,84 +183,91 @@ export async function runFFmpegTask(task: FFmpegTask): Promise<Blob> {
     }
   }
 
-  if (task.onProgress) {
-    ffmpeg.on('progress', ({ progress, time }) => {
-      task.onProgress!({ progress: Math.min(Math.max(progress, 0), 1), time })
-    })
-  }
-
   let lastLogs: string[] = []
-  ffmpeg.on('log', ({ message }) => {
+  const onLog = ({ message }: { message: string }) => {
     lastLogs.push(message)
     if (lastLogs.length > 30) lastLogs.shift()
-  })
+  }
+  const onProgress = ({ progress, time }: FFmpegProgress) => {
+    task.onProgress?.({ progress: Math.min(Math.max(progress, 0), 1), time })
+  }
+
+  // FFmpeg 实例是全局单例：监听器必须在本次任务结束时移除，
+  // 否则每调用一次就累积一组监听器（内存泄漏），且旧任务的 onProgress 会串扰新任务的进度。
+  ffmpeg.on('log', onLog)
+  if (task.onProgress) ffmpeg.on('progress', onProgress)
 
   try {
-    console.log('[ffmpeg] 执行命令:', task.args.join(' '))
-    const exitCode = await ffmpeg.exec(task.args)
+    try {
+      console.log('[ffmpeg] 执行命令:', task.args.join(' '))
+      const exitCode = await ffmpeg.exec(task.args)
 
-    if (exitCode !== 0) {
-      throw new Error(`FFmpeg 退出码: ${exitCode}\n最近日志:\n${lastLogs.slice(-8).join('\n')}`)
+      if (exitCode !== 0) {
+        throw new Error(`FFmpeg 退出码: ${exitCode}\n最近日志:\n${lastLogs.slice(-8).join('\n')}`)
+      }
+    } catch (e: any) {
+      for (const input of task.inputFiles) {
+        try { await ffmpeg.deleteFile(input.name) } catch {}
+      }
+
+      const errMsg = e?.message || String(e)
+      const cmdStr = task.args.join(' ')
+
+      // 分类错误，给出针对性建议
+      let userMessage = ''
+      if (errMsg.includes('memory access out of bounds') || errMsg.includes('RuntimeError')) {
+        userMessage =
+          `处理失败：内存访问越界（memory access out of bounds）\n\n` +
+          `这是 ffmpeg.wasm 的已知限制，常见原因：\n` +
+          `1. 视频编码/格式不被 wasm 版本支持（如某些 HEVC、AV1、ProRes）\n` +
+          `2. 视频分辨率过高或文件过大\n` +
+          `3. 某些滤镜组合触发 wasm bug\n\n` +
+          `建议：\n` +
+          `• 先用「无损转封装」工具转为 MP4 后再处理\n` +
+          `• 尝试降低视频分辨率后再处理\n` +
+          `• 换用「视频格式转换」工具先转码\n\n` +
+          `技术详情：${errMsg.slice(0, 200)}\n` +
+          `执行命令：${cmdStr.slice(0, 200)}`
+      } else if (errMsg.includes('Invalid data found') || errMsg.includes('Invalid argument')) {
+        userMessage =
+          `处理失败：无法识别文件格式或参数无效\n\n` +
+          `可能原因：文件损坏、格式不支持、或参数组合有误\n` +
+          `建议：先用「视频格式转换」转为标准 MP4 后再处理\n\n` +
+          `技术详情：${errMsg.slice(0, 200)}`
+      } else if (errMsg.includes('Permission denied') || errMsg.includes('Operation not permitted')) {
+        userMessage =
+          `处理失败：文件访问权限问题\n\n` +
+          `建议：刷新页面后重试，或重新上传文件\n\n` +
+          `技术详情：${errMsg.slice(0, 200)}`
+      } else {
+        userMessage =
+          `处理失败：${errMsg.slice(0, 300)}\n\n` +
+          `提示：某些视频格式/编码可能不被支持，请尝试先用「无损转封装」或「视频格式转换」转为 MP4 后再处理。\n` +
+          `执行命令：${cmdStr.slice(0, 200)}`
+      }
+
+      throw new Error(userMessage)
     }
-  } catch (e: any) {
+
+    let data
+    try {
+      data = await ffmpeg.readFile(task.outputName)
+    } catch (e: any) {
+      throw new Error(`读取输出文件失败: ${e?.message || e}`)
+    }
+
+    const blob = new Blob([new Uint8Array(data as Uint8Array)], { type: getMimeType(task.outputName) })
+
     for (const input of task.inputFiles) {
       try { await ffmpeg.deleteFile(input.name) } catch {}
     }
+    try { await ffmpeg.deleteFile(task.outputName) } catch {}
 
-    const errMsg = e?.message || String(e)
-    const cmdStr = task.args.join(' ')
-
-    // 分类错误，给出针对性建议
-    let userMessage = ''
-    if (errMsg.includes('memory access out of bounds') || errMsg.includes('RuntimeError')) {
-      userMessage =
-        `处理失败：内存访问越界（memory access out of bounds）\n\n` +
-        `这是 ffmpeg.wasm 的已知限制，常见原因：\n` +
-        `1. 视频编码/格式不被 wasm 版本支持（如某些 HEVC、AV1、ProRes）\n` +
-        `2. 视频分辨率过高或文件过大\n` +
-        `3. 某些滤镜组合触发 wasm bug\n\n` +
-        `建议：\n` +
-        `• 先用「无损转封装」工具转为 MP4 后再处理\n` +
-        `• 尝试降低视频分辨率后再处理\n` +
-        `• 换用「视频格式转换」工具先转码\n\n` +
-        `技术详情：${errMsg.slice(0, 200)}\n` +
-        `执行命令：${cmdStr.slice(0, 200)}`
-    } else if (errMsg.includes('Invalid data found') || errMsg.includes('Invalid argument')) {
-      userMessage =
-        `处理失败：无法识别文件格式或参数无效\n\n` +
-        `可能原因：文件损坏、格式不支持、或参数组合有误\n` +
-        `建议：先用「视频格式转换」转为标准 MP4 后再处理\n\n` +
-        `技术详情：${errMsg.slice(0, 200)}`
-    } else if (errMsg.includes('Permission denied') || errMsg.includes('Operation not permitted')) {
-      userMessage =
-        `处理失败：文件访问权限问题\n\n` +
-        `建议：刷新页面后重试，或重新上传文件\n\n` +
-        `技术详情：${errMsg.slice(0, 200)}`
-    } else {
-      userMessage =
-        `处理失败：${errMsg.slice(0, 300)}\n\n` +
-        `提示：某些视频格式/编码可能不被支持，请尝试先用「无损转封装」或「视频格式转换」转为 MP4 后再处理。\n` +
-        `执行命令：${cmdStr.slice(0, 200)}`
-    }
-
-    throw new Error(userMessage)
+    return blob
+  } finally {
+    ffmpeg.off('log', onLog)
+    if (task.onProgress) ffmpeg.off('progress', onProgress)
   }
-
-  let data
-  try {
-    data = await ffmpeg.readFile(task.outputName)
-  } catch (e: any) {
-    throw new Error(`读取输出文件失败: ${e?.message || e}`)
-  }
-
-  const blob = new Blob([new Uint8Array(data as Uint8Array)], { type: getMimeType(task.outputName) })
-
-  for (const input of task.inputFiles) {
-    try { await ffmpeg.deleteFile(input.name) } catch {}
-  }
-  try { await ffmpeg.deleteFile(task.outputName) } catch {}
-
-  return blob
 }
 
 function getMimeType(filename: string): string {

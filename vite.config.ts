@@ -9,6 +9,16 @@ export default defineConfig({
       'Cross-Origin-Embedder-Policy': 'require-corp',
     },
   },
+  // 与 Cloudflare Pages 的 public/_headers 保持一致，
+  // 让 `npm run preview` 能真实复现线上环境（否则本地预览缺少 COOP/COEP）
+  preview: {
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'strict-origin-when-cross-origin',
+    },
+  },
   build: {
     target: 'es2022',
     chunkSizeWarningLimit: 2000,
@@ -16,7 +26,6 @@ export default defineConfig({
       output: {
         manualChunks: {
           'ffmpeg': ['@ffmpeg/ffmpeg', '@ffmpeg/util'],
-          'mediabunny': ['mediabunny'],
           'react-vendor': ['react', 'react-dom', 'react-router-dom'],
         },
       },

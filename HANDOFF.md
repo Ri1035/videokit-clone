@@ -1,7 +1,7 @@
 # VideoKit 项目转手文档
 
 > 本文档供后续开发者/Agent 快速上手项目、修复 bug、继续开发。
-> 最后更新：v0.3.3 / 2026-09-23
+> 最后更新：v0.3.5 / 2026-09-23
 
 ---
 
@@ -11,7 +11,7 @@
 
 - **在线地址**：https://videokit-9kp.pages.dev
 - **GitHub 仓库**：https://github.com/Ri1035/videokit-clone
-- **当前版本**：v0.3.3
+- **当前版本**：v0.3.5
 - **工具数量**：52 个（格式转换 13 / 视频工具 20 / 音频工具 19）
 - **部署平台**：Cloudflare Pages
 - **分支**：main
@@ -30,12 +30,16 @@
 | 状态管理 | React Hooks（useState/useContext） | - |
 | 国际化 | 自定义 i18n（zh/en） | - |
 
-**关键依赖**：
+**关键依赖**（以 package.json 实际为准）：
 ```json
-"@ffmpeg/ffmpeg": "^0.12.10",
-"@ffmpeg/util": "^0.12.1",
-"@ffmpeg/core": "0.12.10"  // 已安装，core.js自托管
+"@ffmpeg/ffmpeg": "^0.12.15",
+"@ffmpeg/util": "^0.12.2",
+"@ffmpeg/core": "^0.12.10"   // 已安装，core.js 自托管到 public/ffmpeg-core/
+"react": "^18.3.1",
+"react-dom": "^18.3.1",
+"react-router-dom": "^6.26.0"
 ```
+> v0.3.5 已移除未使用的 `mediabunny` 依赖（此前它只出现在 vite 的 manualChunks 里，构建产物是一个 0 字节空 chunk）。
 
 ---
 
@@ -53,6 +57,7 @@ videokit-clone/
 │   │   └── tools.ts             # ⭐ 工具注册表（52个工具的元数据，配置驱动）
 │   ├── lib/
 │   │   ├── ffmpegEngine.ts      # ⭐⭐ FFmpeg引擎封装（最容易出bug的文件）
+│   │   ├── ffmpegCommands.ts    # ⭐ ffmpeg 参数生成器（generateFFmpegArgs，按 command 分发）
 │   │   ├── history.ts           # 用户操作历史（localStorage）
 │   │   ├── errorLog.ts          # 全局错误日志
 │   │   └── utils.ts             # 工具函数（下载、文件大小等）
@@ -120,17 +125,26 @@ videokit-clone/
 
 文件：`src/lib/ffmpegEngine.ts`
 
-**加载机制（v0.3.3 修复后）**：
-1. `core.js` 本地自托管（`/ffmpeg-core/ffmpeg-core.js`），**必须是 esm 版本**
+**加载机制（v0.3.5 修复后）**：
+1. `core.js` 本地自托管（`new URL('/ffmpeg-core/ffmpeg-core.js', location.origin).href`），**必须是 esm 版本**
 2. `wasm` 从 CDN 直接加载（unpkg → jsdelivr → fastly.jsdelivr）
 3. 三级 fallback：本地core+CDN wasm → 本地core+toBlobURL wasm → 全CDN toBlobURL
+4. 正常情况应在**第 1 次尝试**就成功。若日志里看到「尝试 6: 全CDN」才成功，说明本地 core.js 这一级挂了。
 
 **⚠️ 历史踩坑记录**：
 - ❌ umd 版本的 core.js 不能用！ffmpeg.wasm 的 Worker 是 `type:"module"`，需要 esm 版本的 default export
 - ❌ wasm 文件 31MB，超过 Cloudflare Pages 单文件 25MB 限制，不能自托管
 - ❌ `toBlobURL` 在 COEP 环境下跨域 fetch 可能失败
 - ❌ 单例模式加载失败后不重置，会导致后续永久失败
-- ✅ COOP/COEP headers 必须设置（`public/_headers`）
+- ❌ **`LOCAL_CORE_URL` 不能写成 `'/ffmpeg-core/ffmpeg-core.js'`（v0.3.5 修复）**：
+  Vite dev 会把 worker 内的 `import(url)` 改写成 `import(__vite__injectQuery(url, 'import'))`，
+  请求变成 `/ffmpeg-core/ffmpeg-core.js?import`；而 Vite 的 `servePublicMiddleware` 遇到
+  `isImportRequest`（`?import`）会直接 `next()`，public 目录文件不再命中，
+  最终落到 SPA fallback 返回 `index.html`（`Content-Type: text/html`），动态 import 报
+  `TypeError: Failed to fetch dynamically imported module: .../ffmpeg-core.js?import=`。
+  `injectQuery` 对不以 `./` 或 `/` 开头的绝对 URL 会原样返回，所以必须拼上 origin。
+  症状：**dev 下必然失败并回退到全 CDN，生产构建却正常**——很容易被误判为「线上问题」。
+- ✅ COOP/COEP headers 必须设置（`public/_headers`），`vite preview` 也已在 `vite.config.ts` 里补齐
 
 **COOP/COEP 配置（public/_headers）**：
 ```
@@ -270,10 +284,27 @@ npm run build  # 生产构建
 **排查**：确认 `App.tsx` 中使用的是 `HashRouter` 而不是 `BrowserRouter`。
 
 ### 7.5 样式问题（圆角/主题）
-
 - 全局圆角风格：`.card` 类用 `rounded-2xl`，按钮用 `rounded-xl`
 - 主题切换：`useTheme` hook，dark 类在根元素
 - 不要用尖锐方框，保持轻简风
+
+### 7.6 连续处理多个文件后进度异常 / 内存持续增长
+**症状**：同一页面连续处理多次后，进度条跳动异常，或页面内存只增不减。
+**原因**（v0.3.5 已修复）：`FFmpeg` 是全局单例，`runFFmpegTask` 每次调用都
+`ffmpeg.on('progress'|'log', ...)` 却从不 `off`，监听器随调用次数线性累积。
+**约定**：今后在 `runFFmpegTask` 里新增任何 `ffmpeg.on()` 都必须配对 `ffmpeg.off()`，
+放在 `finally` 里以保证异常路径也能清理。
+
+### 7.7 滤镜类工具的两条硬约束（写新工具时务必遵守）
+1. **atempo 单次只接受 0.5~100**。需要更极端的倍速时必须串联，例如 0.25x → `atempo=0.5,atempo=0.5`。
+   参考 `ffmpegCommands.ts` 中的 `buildAtempoFilter()`。
+2. **不要轻易用 `[0:a]` 做 filter_complex 输入**。视频没有音轨时 ffmpeg 会直接失败：
+   `Stream specifier ':a' in filtergraph description ... matches no streams`。
+   优先用 `-vf` / `-af`（无对应流时会被忽略），或先用 `ffprobe` 判断音轨是否存在。
+   > 已知遗留：`src/tools/misc.tsx` 的「添加背景音乐 - 混合原声」模式仍使用 `[0:a]`，
+   > 对无音轨视频会失败，属于待修复项。
+3. **音画同步**：改变视频时长（setpts / reverse / 变速）时必须同步处理音频，且方向一致。
+   v0.3.5 修复的 `speed` 就是踩了「慢放时音频取倒数」的坑。
 
 ---
 
@@ -297,11 +328,11 @@ npm run build  # 生产构建
 ---
 
 ## 九、后续开发建议
-
 ### 高优先级
 1. **修复 memory access out of bounds**：添加 ffprobe 预检测，对不支持的编码提前提示
-2. **添加处理超时**：长时间处理自动取消，避免页面卡死
-3. **大文件分片处理**：对大文件先降采样再处理
+2. **修复「添加背景音乐 - 混合原声」对无音轨视频失败**：`src/tools/misc.tsx` 仍用 `[0:a]`（见 7.7）
+3. **添加处理超时**：长时间处理自动取消，避免页面卡死
+4. **大文件分片处理**：对大文件先降采样再处理
 
 ### 中优先级
 4. **更多工具**：视频拼接转场、音频降噪、字幕烧录样式自定义
@@ -336,6 +367,28 @@ npm run build  # 生产构建
 6. ☐ 定位到具体文件：ffmpegEngine.ts / tools.ts / 对应工具组件
 7. ☐ 修复后：`npm run build` 验证 → 更新版本号 → 更新 CHANGELOG → 提交 → 部署
 8. ☐ 线上验证：上传测试文件确认修复
+
+---
+
+## 十二、接手记录（v0.3.5 / 2026-09-23）
+### 已验证的现状
+- 线上 https://videokit-9kp.pages.dev 返回 200，COOP/COEP 头生效
+- `npm install` / `npm run build`（tsc -b && vite build）均通过，无 TS 报错
+- 浏览器端到端实测：无损转封装、视频调速 0.25x 在 dev 与生产构建下均处理成功
+- 三个 CDN（unpkg / jsdelivr / fastly.jsdelivr）的 wasm 均可达，且都带
+  `cross-origin-resource-policy: cross-origin`，在 COEP 环境下可用
+- GitHub token 对 Ri1035/videokit-clone 具备 push/admin 权限；Cloudflare API Token 状态 active
+
+### 本次修复
+见 CHANGELOG `[0.3.5]`：视频调速音画不同步、无音轨视频失败、dev 下 core.js 加载失败、
+FFmpeg 单例监听器泄漏；并移除未使用的 mediabunny 依赖、补齐 preview 响应头。
+
+### 实测踩坑（排查时容易被误导）
+- 在**线上页面**里用 `fetch('http://localhost:xxxx/...')` 注入测试文件会因混合内容/CORS 被拦截，
+  失败后 ffmpeg 会报 `Invalid data found when processing input`（退出码 1）。
+  **这不是产品 bug，是测试方法问题**——注入测试文件请用同源 URL 或 `vite preview` 本地复现。
+- dev 环境与生产构建的 worker 打包方式不同，**ffmpeg 加载相关问题必须在 `npm run preview` 下复现**，
+  只看 `npm run dev` 会得出错误结论（v0.3.5 之前的 core.js 问题正是如此）。
 
 ---
 
