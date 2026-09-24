@@ -9,7 +9,7 @@ import { useToolProcessor } from '../components/useToolProcessor'
 import { getToolById } from '../data/tools'
 import { useI18n } from '../i18n'
 import { runFFmpegTask } from '../lib/ffmpegEngine'
-import { downloadBlob, formatFileSize } from '../lib/utils'
+import { downloadBlob, formatFileSize, renderTextToPng } from '../lib/utils'
 import ProgressBar from '../components/ProgressBar'
 
 /* ========== 视频预览图提取 ========== */
@@ -226,19 +226,23 @@ export function Sora2Watermark() {
     }
   }
 
-  const handleStart = () => {
+  const handleStart = async () => {
     if (!file) return
     const inputName = `input_${Date.now()}.${file.name.split('.').pop()}`
     const isPortrait = dimensions.h > dimensions.w
-    const fontSize = isPortrait ? Math.round(dimensions.w * 0.035) : Math.round(dimensions.h * 0.04)
-    const yPos = isPortrait ? 'h*0.93' : 'h*0.9'
+    const fontSize = Math.max(16, isPortrait ? Math.round(dimensions.w * 0.035) : Math.round(dimensions.h * 0.04))
+    const yPos = isPortrait ? 'H*0.93' : 'H*0.9'
+
+    // wasm 内核里没有字体，drawtext 无法初始化；改用 Canvas 渲染文字图层再 overlay
+    const layer = await renderTextToPng({ text: 'Sora 2', fontSize, color: 'white', shadow: true })
 
     process({
       outputExt: 'mp4',
-      inputFiles: [{ name: inputName, file }],
+      inputFiles: [{ name: inputName, file }, { name: 'text_layer.png', file: layer }],
       buildArgs: (inp, out) => [
-        '-i', inp[0],
-        '-vf', `drawtext=text='Sora 2':fontsize=${fontSize}:fontcolor=white:x=(w-text_w)/2:y=${yPos}:shadowcolor=black@0.5:shadowx=2:shadowy=2`,
+        '-i', inp[0], '-i', inp[1],
+        '-filter_complex', `[0:v][1:v]overlay=(W-w)/2:${yPos}[v]`,
+        '-map', '[v]', '-map', '0:a?',
         '-c:v', 'libx264', '-preset', 'fast', '-c:a', 'copy', '-movflags', '+faststart', out,
       ],
     })

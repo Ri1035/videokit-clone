@@ -347,8 +347,11 @@ export function RemoveSubtitles() {
       inputFiles: [{ name: inputName, file }],
       buildArgs: (inp, out) => {
         if (mode === 'soft') return ['-i', inp[0], '-c:v', 'copy', '-c:a', 'copy', '-sn', '-movflags', '+faststart', out]
-        // 硬字幕：底部区域模糊
-        return ['-i', inp[0], '-vf', 'delogo=x=0:y=ih*0.85:w=iw:h=ih*0.15', '-c:a', 'copy', '-movflags', '+faststart', out]
+        // 硬字幕：底部 15% 条带做区域模糊。
+        // 这里不能用 delogo：它要求常量数值，写 ih*0.85 这类表达式会
+        // "Error when parsing the expression 'ih*0.85' for y"，crop 则支持表达式。
+        const fc = '[0:v]split[base][b];[b]crop=iw:ih*0.15:0:ih*0.85,boxblur=luma_radius=9:luma_power=2:chroma_radius=4:chroma_power=2[blur];[base][blur]overlay=0:H*0.85[v]'
+        return ['-i', inp[0], '-filter_complex', fc, '-map', '[v]', '-map', '0:a?', '-c:v', 'libx264', '-preset', 'fast', '-c:a', 'copy', '-movflags', '+faststart', out]
       },
     })
   }

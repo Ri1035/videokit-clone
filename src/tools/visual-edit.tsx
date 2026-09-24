@@ -8,6 +8,7 @@ import FileUpload from '../components/FileUpload'
 import { useToolProcessor } from '../components/useToolProcessor'
 import { getToolById } from '../data/tools'
 import { useI18n } from '../i18n'
+import { renderTextToPng } from '../lib/utils'
 
 /* ========== 视频画面裁剪 ========== */
 export function VideoCrop() {
@@ -220,13 +221,26 @@ export function RemoveWatermark() {
   const handleStart = () => {
     if (!file) return
     const inputName = `input_${Date.now()}.${file.name.split('.').pop()}`
-    const filter = mode === 'blur'
-      ? `delogo=x=${area.x}:y=${area.y}:y=${area.y}:w=${area.w}:h=${area.h}`
-      : `drawbox=x=${area.x}:y=${area.y}:w=${area.w}:h=${area.h}:color=black:t=fill`
+    // delogo 要求区域完整落在画面内且参数为常量，越界或表达式都会
+    // "Failed to configure input pad"，这里先夹取到画面范围内
+    const x = Math.max(0, Math.min(area.x, dimensions.w - 2))
+    const y = Math.max(0, Math.min(area.y, dimensions.h - 2))
+    const w = Math.max(2, Math.min(area.w, dimensions.w - x))
+    const h = Math.max(2, Math.min(area.h, dimensions.h - y))
+    if (mode === 'blur') {
+      // 用 crop + boxblur + overlay 做区域模糊，替代 wasm 里不可用的 delogo
+      const fc = `[0:v]split[base][b];[b]crop=${w}:${h}:${x}:${y},boxblur=luma_radius=9:luma_power=2:chroma_radius=4:chroma_power=2[blur];[base][blur]overlay=${x}:${y}[v]`
+      process({
+        outputExt: 'mp4',
+        inputFiles: [{ name: inputName, file }],
+        buildArgs: (inp, out) => ['-i', inp[0], '-filter_complex', fc, '-map', '[v]', '-map', '0:a?', '-c:v', 'libx264', '-preset', 'fast', '-c:a', 'copy', '-movflags', '+faststart', out],
+      })
+      return
+    }
     process({
       outputExt: 'mp4',
       inputFiles: [{ name: inputName, file }],
-      buildArgs: (inp, out) => ['-i', inp[0], '-vf', filter, '-c:a', 'copy', '-movflags', '+faststart', out],
+      buildArgs: (inp, out) => ['-i', inp[0], '-vf', `drawbox=x=${x}:y=${y}:w=${w}:h=${h}:color=black:t=fill`, '-c:v', 'libx264', '-preset', 'fast', '-c:a', 'copy', '-movflags', '+faststart', out],
     })
   }
 
@@ -339,23 +353,25 @@ export function AddText() {
   const [endTime, setEndTime] = useState('')
   const { processing, process, reset, ResultView, ProgressView, ErrorView } = useToolProcessor()
 
+  // overlay 的位置表达式里 w/h 是图层尺寸，W/H 是视频尺寸
   const posMap: Record<string, string> = {
-    top: '(w-text_w)/2:40',
-    center: '(w-text_w)/2:(h-text_h)/2',
-    bottom: '(w-text_w)/2:h-text_h-40',
+    top: '(W-w)/2:40',
+    center: '(W-w)/2:(H-h)/2',
+    bottom: '(W-w)/2:H-h-40',
   }
 
-  const handleStart = () => {
+  const handleStart = async () => {
     if (!file || !text) return
     const inputName = `input_${Date.now()}.${file.name.split('.').pop()}`
-    const escaped = text.replace(/'/g, "\\'").replace(/:/g, '\\:')
-    let drawtext = `drawtext=text='${escaped}':fontsize=${fontSize}:fontcolor=${fontColor}:x=${posMap[position]}`
-    if (startTime) drawtext += `:enable='gte(t,${startTime})'`
-    if (endTime) drawtext += `:enable='between(t,${startTime || 0},${endTime})'`
+    // 用 Canvas 渲染文字图层再 overlay：wasm 里没有字体，drawtext 必然初始化失败
+    const layer = await renderTextToPng({ text, fontSize, color: fontColor, shadow: true })
+    let enable = ''
+    if (endTime) enable = `:enable='between(t,${startTime || 0},${endTime})'`
+    else if (startTime) enable = `:enable='gte(t,${startTime})'`
     process({
       outputExt: 'mp4',
-      inputFiles: [{ name: inputName, file }],
-      buildArgs: (inp, out) => ['-i', inp[0], '-vf', drawtext, '-c:v', 'libx264', '-preset', 'fast', '-c:a', 'copy', '-movflags', '+faststart', out],
+      inputFiles: [{ name: inputName, file }, { name: 'text_layer.png', file: layer }],
+      buildArgs: (inp, out) => ['-i', inp[0], '-i', inp[1], '-filter_complex', `[0:v][1:v]overlay=${posMap[position]}${enable}[v]`, '-map', '[v]', '-map', '0:a?', '-c:v', 'libx264', '-preset', 'fast', '-c:a', 'copy', '-movflags', '+faststart', out],
     })
   }
 

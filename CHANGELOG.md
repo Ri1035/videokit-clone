@@ -7,6 +7,36 @@
 
 ## [未发布]
 
+## [0.3.7] - 2026-09-24
+
+### 修复
+- **「视频拼接」不同分辨率/朝向的视频拼出来只有第一段能播（严重）**
+  - 复现：640×360(3s) + 480×854(2s) 拼接，产物容器显示 5s，但第 4.5s 抽帧为 **0 字节**
+    —— concat demuxer 只按包拼接，分辨率一变后续帧就解不出来
+  - 根因：`-f concat -i list.txt` 要求所有输入流参数完全一致，异构输入会产出「时长正常但画面损坏」的坏文件
+  - 修复：改用 `filter_complex` 的 concat 滤镜，逐段 `scale + pad + setsar + fps + format` 归一化后再拼
+  - 画布取第一个输入的分辨率（偶数化），探测失败时退回 1920×1080
+- **「音频合并」混合格式（如 mp3 + wav）第二段整段丢失**
+  - 复现：mp3(3.03s) + wav(3.00s)，产物只有 3.03s，日志刷屏
+    `Error while decoding stream #0:0: Invalid data found when processing input`
+  - 根因同上：concat demuxer 把 wav 的包喂给了 mp3 解码器
+  - 修复：改用 concat 滤镜，先 `aformat` 统一采样格式/采样率/声道再拼接
+- **滤镜链缺陷（上一轮已改、本轮回归确认）**
+  - 图片转视频/转 GIF 混格式（jpg + png/webp/gif）改用 filter_complex concat，不再走 concat demuxer
+  - 去水印/去硬字幕改 `crop + boxblur + overlay`（wasm 里 delogo 参数不能带表达式）
+  - 文字叠加 / Sora2 水印改 Canvas 渲染 PNG + overlay（wasm 内无字体，drawtext 必失败）
+  - GIF 压缩的 `palettegen` 参数名更正为 `max_colors`
+  - GIF 压缩探针用例修正：缩放系数误写成 `iw*50`（16000px 宽触发 OOM），实为 `iw*0.5`
+
+### 变更
+- 新增 `probeInput()`：拼接前探测每个输入的分辨率与是否含音轨
+  （concat 滤镜要求各段流数量一致，混入无音轨输入时自动退回纯视频拼接）
+
+### 验证
+- 全工具回归探针 **78/78 通过**（52 个工具的实际 ffmpeg 参数）
+- 拼接产物抽帧校验：第二段 t=4.5s 可正常解码（修复前 0 字节）
+- 其余修复项产物时长/尺寸与预期一致（图片转视频 6s/1920×1080、GIF 压缩 160×120 等）
+
 ## [0.3.6] - 2026-09-24
 
 ### 修复

@@ -105,7 +105,7 @@ export function GifCompress() {
       inputFiles: [{ name: inputName, file }],
       buildArgs: (inp, out) => [
         '-i', inp[0],
-        '-vf', `fps=${fps},scale=iw*${parseInt(scale)/100}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=maxcolors=${colors}[p];[s1][p]paletteuse`,
+        '-vf', `fps=${fps},scale=iw*${parseInt(scale)/100}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=${colors}[p];[s1][p]paletteuse`,
         '-loop', '0',
         out,
       ],

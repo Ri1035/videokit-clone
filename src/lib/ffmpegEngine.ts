@@ -287,6 +287,53 @@ export function checkSharedArrayBuffer(): boolean {
   return typeof SharedArrayBuffer !== 'undefined'
 }
 
+export interface InputProbe {
+  width: number
+  height: number
+  hasAudio: boolean
+}
+
+/**
+ * 探测单个输入的分辨率与是否含音轨。
+ *
+ * 为什么需要：拼接类工具要改用 filter_complex 的 concat 滤镜，而 concat 滤镜
+ * 要求每一段的流数量一致——只要有一个输入没有音轨，[i:a] 就会直接报错；
+ * 同时 concat 前必须把各段 scale/pad 到同一画布，所以得先知道尺寸。
+ * 这里让 ffmpeg 只做输入分析（不带输出，退出码必然是 1），从 stderr 日志里取信息，
+ * 不产生任何产物、不解码画面，开销极小。
+ */
+export async function probeInput(file: File | Blob, name: string): Promise<InputProbe> {
+  const result: InputProbe = { width: 0, height: 0, hasAudio: false }
+  const ffmpeg = await getFFmpeg()
+  const logs: string[] = []
+  const onLog = ({ message }: { message: string }) => logs.push(message)
+
+  try {
+    await ffmpeg.writeFile(name, await fetchFile(file))
+  } catch {
+    return result
+  }
+
+  ffmpeg.on('log', onLog)
+  try {
+    await ffmpeg.exec(['-i', name])
+  } catch {
+    // 无输出文件，退出码非 0 属预期
+  } finally {
+    ffmpeg.off('log', onLog)
+    try { await ffmpeg.deleteFile(name) } catch {}
+  }
+
+  for (const line of logs) {
+    if (/Stream #\d+:\d+.*: Audio:/.test(line)) result.hasAudio = true
+    if (!result.width) {
+      const m = line.match(/Stream #\d+:\d+.*: Video:.*?(\d{2,5})x(\d{2,5})[\s,\[]/)
+      if (m) { result.width = parseInt(m[1]); result.height = parseInt(m[2]) }
+    }
+  }
+  return result
+}
+
 export function resetFFmpeg() {
   ffmpegInstance = null
   loadPromise = null

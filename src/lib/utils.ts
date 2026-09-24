@@ -52,6 +52,49 @@ export function generateId(): string {
   return Math.random().toString(36).substring(2, 10)
 }
 
+/**
+ * 把文字渲染成透明 PNG 图层，供 ffmpeg 的 overlay 滤镜合成。
+ *
+ * 为什么不用 drawtext：@ffmpeg/core 的 wasm 文件系统里没有任何字体，
+ * drawtext 会直接 "Error initializing filter 'drawtext'" 而无法工作；
+ * 若自带字体则要为中文支持背上 20MB+ 的 CJK 字体，且还要塞进 wasm 内存。
+ * 改用浏览器 Canvas 渲染，直接复用系统字体（含中文），零额外体积。
+ */
+export function renderTextToPng(opts: {
+  text: string
+  fontSize: number
+  color: string
+  shadow?: boolean
+}): Promise<Blob> {
+  const { text, fontSize, color, shadow } = opts
+  const pad = Math.ceil(fontSize * 0.4)
+  const font = `${fontSize}px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`
+  const canvas = document.createElement('canvas')
+  const probe = canvas.getContext('2d')!
+  probe.font = font
+  const textW = Math.ceil(probe.measureText(text).width)
+  canvas.width = Math.max(textW + pad * 2, fontSize)
+  canvas.height = Math.ceil(fontSize * 1.35) + pad * 2
+
+  // 调整尺寸会重置 2D 上下文，字体等设置必须在这之后重新应用
+  const ctx = canvas.getContext('2d')!
+  ctx.font = font
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'middle'
+  ctx.fillStyle = color
+  if (shadow) {
+    ctx.shadowColor = 'rgba(0,0,0,0.5)'
+    ctx.shadowBlur = 2
+    ctx.shadowOffsetX = 2
+    ctx.shadowOffsetY = 2
+  }
+  ctx.fillText(text, pad, canvas.height / 2)
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('文字图层渲染失败'))), 'image/png')
+  })
+}
+
 export const VIDEO_EXTENSIONS = ['mp4', 'webm', 'mov', 'mkv', 'avi', 'flv', 'wmv', 'm4v', '3gp']
 export const AUDIO_EXTENSIONS = ['mp3', 'wav', 'aac', 'ogg', 'flac', 'm4a', 'wma', 'opus']
 export const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp']

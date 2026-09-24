@@ -8,10 +8,21 @@ import FileUpload from '../components/FileUpload'
 import { useToolProcessor } from '../components/useToolProcessor'
 import { getToolById } from '../data/tools'
 import { useI18n } from '../i18n'
-import { runFFmpegTask } from '../lib/ffmpegEngine'
+import { runFFmpegTask, probeInput } from '../lib/ffmpegEngine'
 import { transcodeWithFallback } from '../lib/webcodecs'
 import { downloadBlob, replaceExtension, formatFileSize } from '../lib/utils'
 import ProgressBar from '../components/ProgressBar'
+
+/** 读取图片文件的实际像素尺寸（用于确定合成 GIF 的画布比例） */
+function getImageSize(file: File): Promise<{ w: number; h: number }> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file)
+    const img = new Image()
+    img.onload = () => { resolve({ w: img.naturalWidth, h: img.naturalHeight }); URL.revokeObjectURL(url) }
+    img.onerror = () => { resolve({ w: 0, h: 0 }); URL.revokeObjectURL(url) }
+    img.src = url
+  })
+}
 
 /* ========== 批量转码 ========== */
 export function BatchTranscode() {
@@ -214,6 +225,7 @@ export function VideoMerger() {
   const tool = getToolById('video-merger')!
   const { t } = useI18n()
   const [files, setFiles] = useState<File[]>([])
+  const [probing, setProbing] = useState(false)
   const { processing, process, reset, ResultView, ProgressView, ErrorView } = useToolProcessor()
 
   const moveFile = (index: number, dir: -1 | 1) => {
@@ -224,16 +236,49 @@ export function VideoMerger() {
     setFiles(newFiles)
   }
 
-  const handleStart = () => {
-    if (files.length < 2) return
+  const handleStart = async () => {
+    if (files.length < 2 || probing || processing) return
+    setProbing(true)
     const inputFiles = files.map((f, i) => ({ name: `input_${i}.${f.name.split('.').pop()}`, file: f }))
-    // 生成 concat 文件列表
-    const listContent = inputFiles.map(f => `file '${f.name}'`).join('\n')
-    const listBlob = new Blob([listContent], { type: 'text/plain' })
+
+    // 之前用 concat demuxer：它在分辨率/朝向不一致时只是按包拼接，
+    // 容器时长看着对（3s+2s=5s），但第二段根本解不出画面（抽帧 0 字节）。
+    // 改用 filter_complex 的 concat 滤镜，先给每段做 scale/pad/setsar 归一化。
+    const probes = await Promise.all(inputFiles.map((f) => probeInput(f.file, f.name)))
+    setProbing(false)
+
+    // concat 滤镜要求每段流数量一致，只要有一个输入没音轨，[i:a] 就会报错，
+    // 因此先探测再决定是否带上音频轨。
+    const withAudio = probes.every((p) => p.hasAudio)
+    // 画布取第一个输入的分辨率（偶数化），探测失败时退回 1920x1080
+    const first = probes[0]
+    const W = first.width ? Math.round(first.width / 2) * 2 : 1920
+    const H = first.height ? Math.round(first.height / 2) * 2 : 1080
+
+    const inputs = inputFiles.flatMap((f) => ['-i', f.name])
+    const parts = inputFiles.map((_, i) =>
+      `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[v${i}]`
+    )
+
+    let filter: string
+    let maps: string[]
+    if (withAudio) {
+      const audio = inputFiles.map((_, i) =>
+        `[${i}:a:0]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a${i}]`
+      )
+      const seq = inputFiles.map((_, i) => `[v${i}][a${i}]`).join('')
+      filter = [...parts, ...audio, `${seq}concat=n=${inputFiles.length}:v=1:a=1[ov][oa]`].join(';')
+      maps = ['-map', '[ov]', '-map', '[oa]']
+    } else {
+      const seq = inputFiles.map((_, i) => `[v${i}]`).join('')
+      filter = [...parts, `${seq}concat=n=${inputFiles.length}:v=1:a=0[ov]`].join(';')
+      maps = ['-map', '[ov]', '-an']
+    }
+
     process({
       outputExt: 'mp4',
-      inputFiles: [...inputFiles, { name: 'list.txt', file: listBlob }],
-      buildArgs: (_inp, out) => ['-f', 'concat', '-safe', '0', '-i', 'list.txt', '-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', out],
+      inputFiles,
+      buildArgs: (_inp, out) => [...inputs, '-filter_complex', filter, ...maps, '-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', out],
     })
   }
 
@@ -257,7 +302,7 @@ export function VideoMerger() {
             </div>
           ))}
           <div className="mt-4 flex gap-3">
-            <button onClick={handleStart} disabled={processing || files.length < 2} className="btn-primary flex-1">{t('start')}</button>
+            <button onClick={handleStart} disabled={processing || probing || files.length < 2} className="btn-primary flex-1">{t('start')}</button>
             <button onClick={() => { setFiles([]); reset() }} className="btn-secondary">{t('reset')}</button>
           </div>
         </div>
@@ -286,12 +331,21 @@ export function AudioMerger() {
   const handleStart = () => {
     if (files.length < 2) return
     const inputFiles = files.map((f, i) => ({ name: `input_${i}.${f.name.split('.').pop()}`, file: f }))
-    const listContent = inputFiles.map(f => `file '${f.name}'`).join('\n')
-    const listBlob = new Blob([listContent], { type: 'text/plain' })
+
+    // 之前用 concat demuxer：对 mp3+wav 这类混合格式，它把 wav 的包丢给 mp3 解码器，
+    // 满屏 "Invalid data found when processing input"，第二段整段丢失
+    // （3s+3s 只剩 3.03s）。改用 concat 滤镜，先统一采样格式/采样率/声道再拼接。
+    const inputs = inputFiles.flatMap((f) => ['-i', f.name])
+    const parts = inputFiles.map((_, i) =>
+      `[${i}:a:0]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a${i}]`
+    )
+    const seq = inputFiles.map((_, i) => `[a${i}]`).join('')
+    const filter = [...parts, `${seq}concat=n=${inputFiles.length}:v=0:a=1[oa]`].join(';')
+
     process({
       outputExt: 'mp3',
-      inputFiles: [...inputFiles, { name: 'list.txt', file: listBlob }],
-      buildArgs: (_inp, out) => ['-f', 'concat', '-safe', '0', '-i', 'list.txt', '-acodec', 'libmp3lame', '-b:a', '192k', out],
+      inputFiles,
+      buildArgs: (_inp, out) => [...inputs, '-filter_complex', filter, '-map', '[oa]', '-acodec', 'libmp3lame', '-b:a', '192k', out],
     })
   }
 
@@ -337,13 +391,26 @@ export function ImageToVideo() {
   const handleStart = () => {
     if (files.length === 0) return
     const inputFiles = files.map((f, i) => ({ name: `img_${i}.${f.name.split('.').pop()}`, file: f }))
-    // 用 concat demuxer 拼接图片
-    const listContent = inputFiles.map(f => `file '${f.name}'\nduration ${duration}`).join('\n') + `\nfile '${inputFiles[inputFiles.length - 1].name}'`
-    const listBlob = new Blob([listContent], { type: 'text/plain' })
+
+    // 必须用 -filter_complex concat，不能再用 concat demuxer：
+    // concat demuxer 会把不同格式的图片塞给同一个解码器（jpg 后接 png/webp），
+    // 解码器按上一张的编码格式解析下一张 => "mjpeg: unsupported coding type"，
+    // 最终 "Output file is empty"（可能 exit=0 却产出 0 字节，或直接退出码非 0）。
+    // 多输入 + filter_complex 让每张图各自走解码器，再统一 concat。
+    const inputs = inputFiles.flatMap((f) => [
+      // GIF 用 -stream_loop 循环，静态图用 -loop 1；都限定 -t 保证每张图的时长
+      ...(/\.gif$/i.test(f.name) ? ['-stream_loop', '-1'] : ['-loop', '1']),
+      '-t', duration, '-i', f.name,
+    ])
+    const parts = inputFiles.map((_, i) =>
+      `[${i}:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[v${i}]`
+    )
+    const concat = `${inputFiles.map((_, i) => `[v${i}]`).join('')}concat=n=${inputFiles.length}:v=1:a=0[o]`
+
     process({
       outputExt: 'mp4',
-      inputFiles: [...inputFiles, { name: 'list.txt', file: listBlob }],
-      buildArgs: (_inp, out) => ['-f', 'concat', '-safe', '0', '-i', 'list.txt', '-vf', 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p', '-r', '30', '-c:v', 'libx264', '-preset', 'fast', '-movflags', '+faststart', out],
+      inputFiles,
+      buildArgs: (_inp, out) => [...inputs, '-filter_complex', `${parts.join(';')};${concat}`, '-map', '[o]', '-c:v', 'libx264', '-preset', 'fast', '-movflags', '+faststart', out],
     })
   }
 
@@ -384,15 +451,32 @@ export function ImageToGif() {
   const [delay, setDelay] = useState('50')
   const { processing, process, reset, ResultView, ProgressView, ErrorView } = useToolProcessor()
 
-  const handleStart = () => {
+  const handleStart = async () => {
     if (files.length === 0) return
     const inputFiles = files.map((f, i) => ({ name: `img_${i}.${f.name.split('.').pop()}`, file: f }))
-    const listContent = inputFiles.map(f => `file '${f.name}'\nduration ${parseInt(delay) / 100}`).join('\n') + `\nfile '${inputFiles[inputFiles.length - 1].name}'`
-    const listBlob = new Blob([listContent], { type: 'text/plain' })
+    const dur = String(parseInt(delay) / 100)
+
+    // 画布取第一张图的宽高比（宽度固定 480），保证所有帧尺寸一致才能 concat；
+    // 尺寸必须为偶数，否则 GIF 编码器会报错。
+    const src = await getImageSize(files[0])
+    const cw = 480
+    const ch = src.w > 0 ? Math.max(2, Math.round((cw * src.h) / src.w / 2) * 2) : 360
+
+    // 同 ImageToVideo：混格式图片必须走 filter_complex concat，concat demuxer 会解码错乱
+    const inputs = inputFiles.flatMap((f) => [
+      ...(/\.gif$/i.test(f.name) ? ['-stream_loop', '-1'] : ['-loop', '1']),
+      '-t', dur, '-i', f.name,
+    ])
+    const parts = inputFiles.map((_, i) =>
+      `[${i}:v]scale=${cw}:${ch}:force_original_aspect_ratio=decrease,pad=${cw}:${ch}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=10,format=rgb24[v${i}]`
+    )
+    const concat = `${inputFiles.map((_, i) => `[v${i}]`).join('')}concat=n=${inputFiles.length}:v=1:a=0[s]`
+    const palette = `[s]split[p0][p1];[p0]palettegen[p];[p1][p]paletteuse[o]`
+
     process({
       outputExt: 'gif',
-      inputFiles: [...inputFiles, { name: 'list.txt', file: listBlob }],
-      buildArgs: (_inp, out) => ['-f', 'concat', '-safe', '0', '-i', 'list.txt', '-vf', 'fps=10,scale=480:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse', '-loop', '0', out],
+      inputFiles,
+      buildArgs: (_inp, out) => [...inputs, '-filter_complex', `${parts.join(';')};${concat};${palette}`, '-map', '[o]', '-loop', '0', out],
     })
   }
 
