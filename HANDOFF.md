@@ -1,7 +1,7 @@
 # VideoKit 项目转手文档
 
 > 本文档供后续开发者/Agent 快速上手项目、修复 bug、继续开发。
-> 最后更新：v0.3.5 / 2026-09-23
+> 最后更新：v0.3.6 / 2026-09-24
 
 ---
 
@@ -11,7 +11,7 @@
 
 - **在线地址**：https://videokit-9kp.pages.dev
 - **GitHub 仓库**：https://github.com/Ri1035/videokit-clone
-- **当前版本**：v0.3.5
+- **当前版本**：v0.3.6
 - **工具数量**：52 个（格式转换 13 / 视频工具 20 / 音频工具 19）
 - **部署平台**：Cloudflare Pages
 - **分支**：main
@@ -35,11 +35,13 @@
 "@ffmpeg/ffmpeg": "^0.12.15",
 "@ffmpeg/util": "^0.12.2",
 "@ffmpeg/core": "^0.12.10"   // 已安装，core.js 自托管到 public/ffmpeg-core/
+"mediabunny": "^1.59.1"      // 原生 WebCodecs 转码封装（MPL-2.0），动态 import 不进主包
 "react": "^18.3.1",
 "react-dom": "^18.3.1",
 "react-router-dom": "^6.26.0"
 ```
-> v0.3.5 已移除未使用的 `mediabunny` 依赖（此前它只出现在 vite 的 manualChunks 里，构建产物是一个 0 字节空 chunk）。
+> `mediabunny` 在 v0.3.5 曾被当作未使用依赖移除，**v0.3.6 起已真正启用**（原因见 7.2）。
+> 它只在「WebM / OGG 导出」时动态 `import()`，主包体积不受影响（主包 ~112KB，它单独一个 ~607KB chunk）。
 
 ---
 
@@ -58,6 +60,7 @@ videokit-clone/
 │   ├── lib/
 │   │   ├── ffmpegEngine.ts      # ⭐⭐ FFmpeg引擎封装（最容易出bug的文件）
 │   │   ├── ffmpegCommands.ts    # ⭐ ffmpeg 参数生成器（generateFFmpegArgs，按 command 分发）
+│   │   ├── webcodecs.ts         # ⭐⭐ 原生 WebCodecs 转码（WebM/OGG 主路径，动态 import mediabunny）
 │   │   ├── history.ts           # 用户操作历史（localStorage）
 │   │   ├── errorLog.ts          # 全局错误日志
 │   │   └── utils.ts             # 工具函数（下载、文件大小等）
@@ -252,22 +255,40 @@ npm run build  # 生产构建
 
 ### 7.2 memory access out of bounds（内存访问越界）
 
-**症状**：处理过程中报错 `RuntimeError: memory access out of bounds`
+**症状**：处理过程中报错 `RuntimeError: memory access out of bounds`；
+在 Chromium 里有时表现为渲染进程直接崩溃（`Received signal 11 SEGV_ACCERR`），页面无任何报错。
 
-**原因**：这是 ffmpeg.wasm 的已知限制，通常由以下原因触发：
-- 视频编码不被 wasm 版本支持（如某些 HEVC、AV1、ProRes）
-- 视频分辨率过高（4K以上）
-- 某些滤镜组合触发 wasm bug
-- 文件损坏或非标准编码
+**根因（v0.3.6 定位；本节此前的猜测是错的）**：
+**不是**「编码格式不被支持 / 分辨率过高 / 文件过大 / 滤镜组合」，而是
+**`@ffmpeg/core@0.12.x` 内置的 `libvpx-vp9` 与 `libopus` 编码器在 wasm 中越界访问内存**。
 
-**当前处理**：`ffmpegEngine.ts` 中已分类识别此错误，给出针对性建议。
+实测边界（10s / 720×1280 / H.264+AAC，core 0.12.4 / 0.12.6 / 0.12.10 均复现）：
 
-**可能的修复方向**：
-1. 在执行前先用 ffprobe 检测视频编码，不支持的编码提前提示
-2. 对高分辨率视频自动降采样后再处理
-3. 尝试添加 `-threads 1` 参数（单线程更稳定）
-4. 先转封装为 MP4（`-c copy`）再处理
-5. 升级 ffmpeg.wasm 版本（如果有新版）
+| 编码器 | 结果 |
+|---|---|
+| `libvpx-vp9` | 单帧可编码，**多帧必崩** |
+| `libopus` | 任何参数组合都崩 |
+| `libvpx`(VP8) / `libvorbis` / `libx264` / `libmp3lame` / `-c copy` | 稳定 |
+
+结论：命令里只要出现 `libvpx-vp9` 或 `libopus`，链路必然失败，**调参数、降分辨率都没用**。
+
+**当前处理（v0.3.6）**：WebM / OGG 导出不再使用 wasm 里的这两个编码器，
+统一走 `src/lib/webcodecs.ts` 的 `transcodeWithFallback()`：
+
+1. 优先浏览器原生 **WebCodecs**（VP9 / Opus，由 mediabunny 封装）
+2. 浏览器不支持或转换失败 → 回退 ffmpeg.wasm 的 **VP8 + Vorbis**
+
+调用方：视频格式转换、批量转码、通用页的 MP4→WebM、提取音频（OGG）。
+
+**写新工具时的硬约束**：任何输出 WebM / OGG 的工具都必须走 `transcodeWithFallback()`，
+不要在 `buildArgs` 里直接写 `libvpx-vp9` / `libopus`。
+
+**mediabunny 的两个坑（复现时容易被静默吞掉）**：
+- `video.quality` 必须是 `Quality` 实例，传字符串会抛 `TypeError`。异常被
+  `transcodeWithFallback` 捕获后只打一条 `console.warn` 就回退 ffmpeg，
+  表面「能用」实际慢一个数量级 → 排查时**务必看控制台有没有 `[webcodecs] 原生转码失败`**。
+- 必须带 `preferBitrate: true`：否则走逐帧 quantizer 模式，而 Chromium 的 VP9 编码器
+  并不真正消费 `vp9.quantizer`，实测输出退化为 ~3.8Mbps（10s 素材 4.7MB，比 1.4MB 源文件还大）。
 
 ### 7.3 处理失败但错误信息不明确
 
@@ -329,7 +350,7 @@ npm run build  # 生产构建
 
 ## 九、后续开发建议
 ### 高优先级
-1. **修复 memory access out of bounds**：添加 ffprobe 预检测，对不支持的编码提前提示
+1. ~~**修复 memory access out of bounds**~~ → **v0.3.6 已修复**，WebM / OGG 改走原生 WebCodecs（见 7.2）
 2. **修复「添加背景音乐 - 混合原声」对无音轨视频失败**：`src/tools/misc.tsx` 仍用 `[0:a]`（见 7.7）
 3. **添加处理超时**：长时间处理自动取消，避免页面卡死
 4. **大文件分片处理**：对大文件先降采样再处理
@@ -393,6 +414,29 @@ FFmpeg 单例监听器泄漏；并移除未使用的 mediabunny 依赖、补齐 
   **这不是产品 bug，是测试方法问题**——注入测试文件请用同源 URL 或 `vite preview` 本地复现。
 - dev 环境与生产构建的 worker 打包方式不同，**ffmpeg 加载相关问题必须在 `npm run preview` 下复现**，
   只看 `npm run dev` 会得出错误结论（v0.3.5 之前的 core.js 问题正是如此）。
+
+---
+
+## 十三、接手记录（v0.3.6 / 2026-09-24）
+
+### 本次修复
+见 CHANGELOG `[0.3.6]`：MP4→WebM / →OGG 必崩 `memory access out of bounds`
+（根因是 `@ffmpeg/core` 的 `libvpx-vp9` / `libopus` 越界访问 wasm 内存，详见 7.2），
+改用浏览器原生 WebCodecs 作主路径、VP8 + Vorbis 作降级；
+顺带修掉「批量转码选 WebM 产出 `.webm` 后缀 + H.264 内容的坏文件」，
+以及 mediabunny 参数错误导致原生路径静默回退（此时输出体积反而大于源文件）。
+
+### 与第二节 v0.3.5 备注的出入
+v0.3.5 曾把 `mediabunny` 当未使用依赖移除，**v0.3.6 已重新加回并真正启用**，
+第二节依赖说明已同步更正。
+
+### 实测踩坑（排查时容易被误导）
+- **URL 是 HashRouter**：工具页形如 `/#/tool/video-converter`。
+  自动化测试直接访问 `/tool/xxx` 会落到首页，看起来像「工具页 404」。
+- **「能出结果」不等于「修好了」**：降级路径 VP8 + Vorbis 本身稳定，
+  bug 的表现是「有产物但体积/耗时/编码器都不对」。必须用 `ffprobe` 确认
+  `codec_name` 到底是 `vp9+opus` 还是 `vp8+vorbis`，并检查控制台有没有
+  `[webcodecs] 原生转码失败`，才能判断走的是哪条路。
 
 ---
 

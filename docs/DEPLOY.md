@@ -16,6 +16,32 @@
 
 ## 部署历史
 
+### 2026-09-24 v0.3.6 — 修复 MP4→WebM/OGG 必崩（memory access out of bounds）
+
+- **版本**: v0.3.6
+- **部署时间**: 2026-09-24
+- **部署人**: VideoKit Dev
+- **Commit**: 9f775f6
+- **部署地址**: https://e9b90b71.videokit-9kp.pages.dev （生产别名 https://videokit-9kp.pages.dev）
+- **变更**:
+  - 修复「视频格式转换 → WebM」「→ OGG」必报 `RuntimeError: memory access out of bounds`
+  - 根因：`@ffmpeg/core@0.12.x` 的 `libvpx-vp9` / `libopus` 编码器在 wasm 中越界访问内存
+    （Chromium 实测 `Received signal 11 SEGV_ACCERR`），与参数/分辨率/滤镜无关
+  - 方案：WebM / OGG 改走浏览器原生 WebCodecs（VP9 / Opus）；不支持时回退 ffmpeg.wasm 的 VP8 + Vorbis
+  - 修复「批量转码」选 WebM 产出「`.webm` 后缀 + H.264 内容」坏文件
+  - 修复 mediabunny `quality` 必须为 `Quality` 实例、`preferBitrate` 缺失导致原生路径静默回退
+    （回退后输出体积反而大于源文件）
+  - 更正 `memory access out of bounds` 错误提示文案（原归因于格式/分辨率/滤镜，实为 wasm 内核缺陷）
+- **验证**:
+  - ✅ HTTP 200，COOP/COEP headers 生效
+  - ✅ 线上主包 `index-BSeLbmpN.js`（112.10 kB）与本地 `npm run build` 产物一致，页脚版本 v0.3.6
+  - ✅ 懒加载块 `assets/index-BM1HnjV1.js`（mediabunny 606.88 kB）线上 200，原生路径可用
+  - ✅ 线上真实转码（10s / 720×1280 / H.264+AAC 样例）：视频格式转换 → WebM，
+    4.2s / 1.19MB / VP9+Opus / 10.06s，控制台无 `[webcodecs] 原生转码失败` 回退日志
+  - ✅ 同构建产物验证其余链路：MP4→WebM、批量转码→WebM、MP3→OGG、提取音频→OGG 全部通过
+  - ✅ 强制屏蔽 WebCodecs（模拟不支持环境）：回退 VP8 + Vorbis，产物有效
+  - ✅ 17 个常用工具冒烟测试全部 SUCCESS
+
 ### 2026-09-23 v0.3.5 — 修复视频调速音画不同步等 4 项问题
 
 - **版本**: v0.3.5
