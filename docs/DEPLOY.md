@@ -16,6 +16,35 @@
 
 ## 部署历史
 
+### 2026-09-24 v0.3.7 — 修复视频/音频拼接异构输入产出坏文件
+
+- **版本**: v0.3.7
+- **部署时间**: 2026-09-24
+- **部署人**: VideoKit Dev
+- **Commit**: 2bccc5f（tag `v0.3.7`）
+- **部署地址**: https://7838775f.videokit-9kp.pages.dev （生产别名 https://videokit-9kp.pages.dev）
+- **变更**:
+  - 修复「视频拼接」不同分辨率/朝向的视频拼出来只有第一段能播
+    - 根因：`-f concat -i list.txt` 要求所有输入流参数一致；异构输入会产出
+      「容器时长正常、画面损坏」的坏文件（实测 640×360(3s)+480×854(2s) 产物标称 5s，
+      但第 4.5s 抽帧 **0 字节**）
+    - 方案：改用 `filter_complex` 的 concat 滤镜，逐段
+      `scale + pad + setsar + fps + format` 归一化后再拼；画布取第一个输入的分辨率
+  - 修复「音频合并」混合格式（mp3 + wav）第二段整段丢失
+    - 根因同上：concat demuxer 把 wav 的包喂给 mp3 解码器，
+      日志刷屏 `Invalid data found when processing input`，3s+3s 只剩 3.03s
+    - 方案：改用 concat 滤镜 + `aformat` 统一采样格式/采样率/声道
+  - 新增 `probeInput()`：拼接前探测各输入的分辨率与音轨，混入无音轨输入时自动退回纯视频
+  - 一并带上上一轮已修但未发布的 8 项滤镜链修复（图片转视频/GIF、去水印、去硬字幕、
+    文字叠加、Sora2 水印、GIF 压缩 `max_colors`）
+- **验证**:
+  - ✅ 全工具回归探针 **78/78 通过**（覆盖 52 个工具的真实 ffmpeg 参数）
+  - ✅ 线上产物抽帧校验：合并视频 t=4.5s（第二段）可解码，10968B；修复前 0 字节
+  - ✅ 线上「视频拼接」真实跑通：h264 640×360 + aac / 5.039s / 143,718B
+  - ✅ 线上「音频合并」真实跑通：mp3 44.1kHz 立体声 / 6.034s（3.03s+3.00s 全保留）
+  - ✅ HTTP 200，COOP/COEP headers 生效
+  - ✅ 线上主包 `index-eU8Cbxw4.js`（115.20 kB）与本地 `npm run build` 产物一致
+
 ### 2026-09-24 v0.3.6 — 修复 MP4→WebM/OGG 必崩（memory access out of bounds）
 
 - **版本**: v0.3.6
