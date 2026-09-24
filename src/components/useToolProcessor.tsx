@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react'
 import ProgressBar from './ProgressBar'
 import { runFFmpegTask } from '../lib/ffmpegEngine'
+import { transcodeWithFallback, type NativeContainer } from '../lib/webcodecs'
 import { downloadBlob, replaceExtension, formatFileSize } from '../lib/utils'
 import { useI18n } from '../i18n'
 import { addHistory, updateHistory } from '../lib/history'
@@ -15,6 +16,11 @@ interface UseToolProcessorOptions {
   outputExt: string
   buildArgs: (inputNames: string[], outputName: string, params: Record<string, string>) => string[]
   inputFiles: { name: string; file: File | Blob }[]
+  /**
+   * 可选：该工具的输出容器适合用浏览器原生 WebCodecs 转码（webm / ogg）。
+   * 传入后优先走原生管线，不可用时自动回退到 buildArgs 生成的 ffmpeg 命令。
+   */
+  native?: NativeContainer
   onSuccess?: (result: ResultState) => void
   toolId?: string
   toolName?: string
@@ -62,7 +68,7 @@ export function useToolProcessor() {
         {}
       )
 
-      const blob = await runFFmpegTask({
+      const ffmpegRun = () => runFFmpegTask({
         inputFiles: opts.inputFiles,
         args,
         outputName,
@@ -71,6 +77,15 @@ export function useToolProcessor() {
           setProgress(p.progress)
         },
       })
+
+      const blob = opts.native && firstFile
+        ? await transcodeWithFallback({
+            file: firstFile,
+            container: opts.native,
+            onProgress: (p) => { setEngineLoading(false); setProgress(p) },
+            ffmpegFallback: ffmpegRun,
+          })
+        : await ffmpegRun()
 
       const firstName = opts.inputFiles[0]?.name || 'output'
       const resultName = replaceExtension(firstName.replace(/^input_\d+/, ''), opts.outputExt)

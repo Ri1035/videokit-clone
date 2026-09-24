@@ -35,8 +35,12 @@ export function generateFFmpegArgs(
     case 'to-mov':
       return ['-i', inputName, '-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-c:a', 'aac', '-b:a', '192k', outputName]
 
+    // ⚠️ 这里只作为「WebCodecs 不可用」时的降级路径，必须用 wasm 里实测稳定的编码器：
+    //   libvpx-vp9 与 libopus 在 @ffmpeg/core 0.12.x 中会越界访问 wasm 内存
+    //   （线上报 RuntimeError: memory access out of bounds，实测直接 SIGSEGV），
+    //   而 libvpx(VP8) / libvorbis 稳定。正常路径请走 src/lib/webcodecs.ts 的原生转码。
     case 'to-webm':
-      return ['-i', inputName, '-c:v', 'libvpx-vp9', '-crf', '30', '-b:v', '0', '-c:a', 'libopus', '-b:a', '128k', outputName]
+      return ['-i', inputName, '-c:v', 'libvpx', '-crf', '30', '-b:v', '0', '-c:a', 'libvorbis', '-b:a', '128k', outputName]
 
     case 'gif-to-mp4':
       return ['-i', inputName, '-movflags', '+faststart', '-pix_fmt', 'yuv420p', '-c:v', 'libx264', outputName]
@@ -50,7 +54,8 @@ export function generateFFmpegArgs(
       return ['-i', inputName, '-vn', '-acodec', 'pcm_s16le', outputName]
 
     case 'to-ogg':
-      return ['-i', inputName, '-vn', '-acodec', 'libopus', '-b:a', '128k', outputName]
+      // 同 to-webm：libopus 在 wasm 内核中不可用，降级用 libvorbis（OGG 原生编码器）
+      return ['-i', inputName, '-vn', '-acodec', 'libvorbis', '-b:a', '128k', outputName]
 
     case 'to-flac':
       return ['-i', inputName, '-vn', '-acodec', 'flac', outputName]

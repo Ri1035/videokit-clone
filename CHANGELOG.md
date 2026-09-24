@@ -7,6 +7,45 @@
 
 ## [未发布]
 
+## [0.3.6] - 2026-09-24
+
+### 修复
+- **「MP4 → WebM / → OGG」必崩 `memory access out of bounds`（严重）**
+  - 根因：`@ffmpeg/core@0.12.x` 的 `libvpx-vp9` 与 `libopus` 编码器在 wasm 中越界访问内存
+    （Chromium 实测直接 `Received signal 11 SEGV_ACCERR`），与视频编码格式、分辨率、滤镜组合均无关
+  - 实测边界：`libvpx-vp9` 单帧可编码、**多帧必崩**；`libopus` 任何参数组合都崩；
+    `libvpx(VP8)` / `libvorbis` / `libx264` / `libmp3lame` / 无损转封装 全部稳定
+  - 结论：只要用 wasm 里的这两个编码器，链路就必然失败，**不是参数问题**
+  - 修复：WebM / OGG 改走浏览器原生 WebCodecs（VP9 / Opus），不再依赖 wasm 的这两个编码器
+  - 降级：不支持 WebCodecs 的浏览器回退 ffmpeg.wasm 的 VP8 + Vorbis
+  - 实测（10s / 720×1280 / H.264+AAC 样例）：原生路径 **4.2s / 1.19MB / VP9+Opus / 10.06s**；
+    旧路线 50s+ 且直接报错
+- **mediabunny 参数错误导致原生路径静默失效**（本轮自测发现并修复）
+  - `video.quality` 必须是 `Quality` 实例，传字符串抛
+    `TypeError: options.video.quality, when provided, must be a Quality`
+    → 原生路径 100% 失败并静默回退慢速 ffmpeg.wasm（表面上「能用」，实际退化成 50s+）
+  - 必须补 `preferBitrate`：否则 mediabunny 走逐帧 quantizer 模式，而 Chromium 的 VP9 编码器
+    并不真正消费 `vp9.quantizer`，实测输出退化为 ~3.8Mbps（10s 素材产出 4.7MB，比 1.4MB 源文件还大）；
+    改后按「分辨率 + 质量档位」折算目标码率，输出体积可控
+- **批量转码选 WebM 产出坏文件**
+  - 根因：无论选什么格式都硬编码 H.264/AAC 参数，选 WebM 会得到「`.webm` 后缀 + H.264 内容」
+  - 修复：按目标格式生成参数，并对 WebM 接入原生 WebCodecs
+- **`memory access out of bounds` 错误文案误导**
+  - 原文案归因于「编码格式不被 wasm 支持 / 分辨率过高 / 文件过大 / 滤镜组合」，与实测根因不符
+  - 修复：改为说明是 wasm 内核编码器缺陷、应用已自动改走原生路径
+
+### 变更
+- 恢复 `mediabunny` 依赖（v0.3.5 曾移除该未使用依赖），MPL-2.0 开源；体积约 600KB，
+  全部改为动态 `import()`，不进主包（主包仍为 117KB）
+- 「视频格式转换」「批量转码」的 WebM 降级路径由 VP9 + Opus 改为 **VP8 + Vorbis**
+
+### 验证
+- 线上真实环境（Cloudflare Pages）实测通过：视频格式转换 → WebM、MP4 转 WebM、
+  批量转码 → WebM、MP3 → OGG、提取音频 → OGG
+- 强制屏蔽 WebCodecs（模拟不支持环境）：回退 VP8 + Vorbis，产物有效可播放
+- 17 个常用工具冒烟测试全部 SUCCESS
+- COOP/COEP 响应头保持生效，ffmpeg.wasm 降级路径不受影响
+
 ## [0.3.5] - 2026-09-23
 
 ### 修复

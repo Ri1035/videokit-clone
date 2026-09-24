@@ -32,9 +32,12 @@ export function VideoConverter() {
     process({
       outputExt: format,
       inputFiles: [{ name: inputName, file }],
+      // WebM 必须走原生 WebCodecs：ffmpeg.wasm 的 libvpx-vp9 / libopus 会越界崩
+      native: format === 'webm' ? 'webm' : undefined,
       buildArgs: (inp, out) => {
         if (format === 'mp4') return ['-i', inp[0], '-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', out]
-        if (format === 'webm') return ['-i', inp[0], '-c:v', 'libvpx-vp9', '-crf', '30', '-b:v', '0', '-c:a', 'libopus', '-b:a', '128k', out]
+        // 降级路径（WebCodecs 不可用时）：VP8 + Vorbis，wasm 内实测稳定
+        if (format === 'webm') return ['-i', inp[0], '-c:v', 'libvpx', '-crf', '30', '-b:v', '0', '-c:a', 'libvorbis', '-b:a', '128k', out]
         if (format === 'mov') return ['-i', inp[0], '-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-c:a', 'aac', '-b:a', '192k', out]
         if (format === 'mkv') return ['-i', inp[0], '-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-c:a', 'aac', '-b:a', '192k', out]
         return ['-i', inp[0], '-c:v', 'mpeg4', '-q:v', '5', '-c:a', 'libmp3lame', '-b:a', '192k', out]
@@ -130,11 +133,13 @@ export function ExtractAudio() {
     process({
       outputExt: format,
       inputFiles: [{ name: inputName, file }],
+      // OGG 走原生 WebCodecs（Opus）；降级路径用 libvorbis（wasm 内 libopus 会崩）
+      native: format === 'ogg' ? 'ogg' : undefined,
       buildArgs: (inp, out) => {
         if (format === 'mp3') return ['-i', inp[0], '-vn', '-acodec', 'libmp3lame', '-b:a', quality, out]
         if (format === 'wav') return ['-i', inp[0], '-vn', '-acodec', 'pcm_s16le', out]
         if (format === 'aac') return ['-i', inp[0], '-vn', '-acodec', 'aac', '-b:a', quality, out]
-        if (format === 'ogg') return ['-i', inp[0], '-vn', '-acodec', 'libopus', '-b:a', '128k', out]
+        if (format === 'ogg') return ['-i', inp[0], '-vn', '-acodec', 'libvorbis', '-b:a', '128k', out]
         if (format === 'flac') return ['-i', inp[0], '-vn', '-acodec', 'flac', out]
         return ['-i', inp[0], '-vn', '-acodec', 'libmp3lame', '-b:a', quality, out]
       },

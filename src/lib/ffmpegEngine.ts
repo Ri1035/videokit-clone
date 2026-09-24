@@ -218,14 +218,13 @@ export async function runFFmpegTask(task: FFmpegTask): Promise<Blob> {
       if (errMsg.includes('memory access out of bounds') || errMsg.includes('RuntimeError')) {
         userMessage =
           `处理失败：内存访问越界（memory access out of bounds）\n\n` +
-          `这是 ffmpeg.wasm 的已知限制，常见原因：\n` +
-          `1. 视频编码/格式不被 wasm 版本支持（如某些 HEVC、AV1、ProRes）\n` +
-          `2. 视频分辨率过高或文件过大\n` +
-          `3. 某些滤镜组合触发 wasm bug\n\n` +
+          `这是 ffmpeg.wasm 内核的缺陷，不是参数或画质设置问题：\n` +
+          `@ffmpeg/core 0.12.x 里的 libvpx-vp9 / libopus 编码器会越界访问 wasm 内存。\n` +
+          `WebM / OGG 相关工具已改用浏览器原生 WebCodecs 编码，正常不会再触发此错误。\n\n` +
           `建议：\n` +
-          `• 先用「无损转封装」工具转为 MP4 后再处理\n` +
-          `• 尝试降低视频分辨率后再处理\n` +
-          `• 换用「视频格式转换」工具先转码\n\n` +
+          `• 如需输出 WebM / OGG，请使用「MP4 转 WebM」「音频转 OGG」工具\n` +
+          `• 其他工具遇到此错误，可先用「无损转封装」把文件转成标准 MP4 再处理\n` +
+          `• 换用最新版 Chrome / Edge 可让更多工具走原生 WebCodecs 管线\n\n` +
           `技术详情：${errMsg.slice(0, 200)}\n` +
           `执行命令：${cmdStr.slice(0, 200)}`
       } else if (errMsg.includes('Invalid data found') || errMsg.includes('Invalid argument')) {

@@ -6,6 +6,7 @@ import FileUpload from '../components/FileUpload'
 import ProgressBar from '../components/ProgressBar'
 import { runFFmpegTask } from '../lib/ffmpegEngine'
 import { generateFFmpegArgs, QUALITY_OPTIONS } from '../lib/ffmpegCommands'
+import { transcodeWithFallback, type NativeContainer } from '../lib/webcodecs'
 import { replaceExtension, downloadBlob, formatFileSize } from '../lib/utils'
 
 export default function GenericToolPage() {
@@ -50,7 +51,12 @@ export default function GenericToolPage() {
 
       const args = generateFFmpegArgs(config.command, inputName, outputName, allParams)
 
-      const blob = await runFFmpegTask({
+      // WebM / OGG 走浏览器原生 WebCodecs（ffmpeg.wasm 的 libvpx-vp9 / libopus 会崩），
+      // 不支持 WebCodecs 时自动回退到上面的 ffmpeg 命令。
+      const container: NativeContainer | null =
+        config.command === 'to-webm' ? 'webm' : config.command === 'to-ogg' ? 'ogg' : null
+
+      const ffmpegRun = () => runFFmpegTask({
         inputFiles: [{ name: inputName, file }],
         args,
         outputName,
@@ -59,6 +65,15 @@ export default function GenericToolPage() {
           setProgress(p.progress)
         },
       })
+
+      const blob = container
+        ? await transcodeWithFallback({
+            file,
+            container,
+            onProgress: (p) => { setEngineLoading(false); setProgress(p) },
+            ffmpegFallback: ffmpegRun,
+          })
+        : await ffmpegRun()
 
       setResult({ blob, name: replaceExtension(file.name, config.outputExt) })
     } catch (e: any) {

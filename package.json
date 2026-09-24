@@ -1,7 +1,7 @@
 {
   "name": "videokit-clone",
   "private": true,
-  "version": "0.3.5",
+  "version": "0.3.6",
   "type": "module",
   "description": "纯前端在线视频工具箱 - 基于 WebCodecs + ffmpeg.wasm，所有处理在浏览器本地完成",
   "scripts": {
@@ -19,6 +19,7 @@
     "@ffmpeg/core": "^0.12.10",
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
+    "mediabunny": "^1.59.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.0"

@@ -9,6 +9,7 @@ import { useToolProcessor } from '../components/useToolProcessor'
 import { getToolById } from '../data/tools'
 import { useI18n } from '../i18n'
 import { runFFmpegTask } from '../lib/ffmpegEngine'
+import { transcodeWithFallback } from '../lib/webcodecs'
 import { downloadBlob, replaceExtension, formatFileSize } from '../lib/utils'
 import ProgressBar from '../components/ProgressBar'
 
@@ -36,11 +37,24 @@ export function BatchTranscode() {
       const inputName = `input_${i}.${file.name.split('.').pop()}`
       const outputName = `output_${i}.${format}`
       try {
-        const blob = await runFFmpegTask({
+        // 之前这里无视 format，永远输出 H.264/AAC 的 MP4 数据，选 WebM 会得到「.webm 后缀 + H.264 内容」的坏文件。
+        const args =
+          format === 'webm'
+            ? ['-i', inputName, '-c:v', 'libvpx', '-crf', '30', '-b:v', '0', '-c:a', 'libvorbis', '-b:a', '128k', outputName]
+            : format === 'mov'
+              ? ['-i', inputName, '-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-c:a', 'aac', '-b:a', '192k', outputName]
+              : ['-i', inputName, '-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', outputName]
+
+        const ffmpegRun = () => runFFmpegTask({
           inputFiles: [{ name: inputName, file }],
-          args: ['-i', inputName, '-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', outputName],
+          args,
           outputName,
         })
+
+        const blob = format === 'webm'
+          ? await transcodeWithFallback({ file, container: 'webm', ffmpegFallback: ffmpegRun })
+          : await ffmpegRun()
+
         setResults(prev => [...prev, { blob, name: replaceExtension(file.name, format) }])
       } catch (e: any) {
         setError(`第 ${i + 1} 个文件处理失败: ${e?.message || '未知错误'}`)
